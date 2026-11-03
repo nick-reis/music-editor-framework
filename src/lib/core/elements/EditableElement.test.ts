@@ -3,7 +3,7 @@ import { MidiNote } from "./MidiNote";
 
 describe("EditableElement behavior through MidiNote", () => {
   it("initializes identifiers, row, start tick, and duration", () => {
-    const note = new MidiNote("note-1", 3, 120, 240);
+    const note = new MidiNote(3, 120, 240, "note-1");
 
     expect(note.id).toBe("note-1");
     expect(note.row).toBe(3);
@@ -12,14 +12,14 @@ describe("EditableElement behavior through MidiNote", () => {
   });
 
   it("returns start and end ticks", () => {
-    const note = new MidiNote("note-1", 0, 120, 240);
+    const note = new MidiNote(0, 120, 240, "note-1");
 
     expect(note.getStartTick()).toBe(120);
     expect(note.getEndTick()).toBe(360);
   });
 
   it("moves without changing duration", () => {
-    const note = new MidiNote("note-1", 0, 120, 240);
+    const note = new MidiNote(0, 120, 240, "note-1");
 
     note.moveToTick(480);
 
@@ -34,13 +34,13 @@ describe("EditableElement behavior through MidiNote", () => {
     [120, -1],
     [120, Number.NaN],
   ])("rejects invalid timing values (%s, %s)", (startTick, durationTicks) => {
-    expect(() => new MidiNote("note-1", 0, startTick, durationTicks)).toThrow(
+    expect(() => new MidiNote(0, startTick, durationTicks, "note-1")).toThrow(
       "Invalid element timing",
     );
   });
 
   it("preserves existing locking behavior", () => {
-    const note = new MidiNote("note-1", 0, 120, 240);
+    const note = new MidiNote(0, 120, 240, "note-1");
     note.locked = true;
 
     note.moveToTick(480);

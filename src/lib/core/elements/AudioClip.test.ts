@@ -4,7 +4,7 @@ import { Timeline } from "../timeline/Timeline";
 
 describe("AudioClip", () => {
   it("inherits shared element behavior", () => {
-    const clip = new AudioClip("clip-1", 1, 120, 480, 2);
+    const clip = new AudioClip(1, 120, 480, 2, "clip-1");
 
     expect(clip.id).toBe("clip-1");
     expect(clip.row).toBe(1);
@@ -14,13 +14,13 @@ describe("AudioClip", () => {
   });
 
   it("cannot be manually resized", () => {
-    const clip = new AudioClip("clip-1", 0, 0, 480, 2);
+    const clip = new AudioClip(0, 0, 480, 2, "clip-1");
 
     expect(() => clip.resizeToDuration(960)).toThrow("Element cannot be resized");
   });
 
   it("moves without changing duration or real-time duration", () => {
-    const clip = new AudioClip("clip-1", 0, 120, 480, 2);
+    const clip = new AudioClip(0, 120, 480, 2, "clip-1");
 
     clip.moveToTick(960);
 
@@ -31,7 +31,7 @@ describe("AudioClip", () => {
 
   it("synchronizes tick duration while preserving start tick and seconds", () => {
     const timeline = new Timeline(120);
-    const clip = new AudioClip("clip-1", 0, 120, 480, 2);
+    const clip = new AudioClip(0, 120, 480, 2, "clip-1");
 
     clip.syncToTempo(timeline.secondsToTicks(clip.durationSeconds));
 
@@ -41,7 +41,7 @@ describe("AudioClip", () => {
   });
 
   it("avoids rounding drift when synchronizing repeatedly at different tempos", () => {
-    const clip = new AudioClip("clip-1", 0, 73, 480, 1.234567);
+    const clip = new AudioClip(0, 73, 480, 1.234567, "clip-1");
     const timeline = new Timeline();
 
     for (const bpm of [60, 180, 90, 137, 120]) {
@@ -61,7 +61,7 @@ describe("AudioClip", () => {
     "rejects invalid audio duration %s",
     (durationSeconds) => {
       expect(
-        () => new AudioClip("clip-1", 0, 0, 480, durationSeconds),
+        () => new AudioClip(0, 0, 480, durationSeconds, "clip-1"),
       ).toThrow("Invalid audio duration");
     },
   );

@@ -3,7 +3,7 @@ import { MidiNote } from "./MidiNote";
 
 describe("MidiNote", () => {
   it("is resizable and changes duration without changing start tick", () => {
-    const note = new MidiNote("note-1", 2, 240, 120);
+    const note = new MidiNote(2, 240, 120, "note-1");
 
     expect(note.resizable).toBe(true);
     note.resizeToDuration(360);
@@ -14,7 +14,7 @@ describe("MidiNote", () => {
   });
 
   it("rejects invalid resized durations", () => {
-    const note = new MidiNote("note-1", 0, 0, 120);
+    const note = new MidiNote(0, 0, 120, "note-1");
 
     expect(() => note.resizeToDuration(0)).toThrow("Invalid element timing");
     expect(() => note.resizeToDuration(Number.NaN)).toThrow(
