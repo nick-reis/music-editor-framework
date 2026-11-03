@@ -4,13 +4,15 @@ import type { Tick } from "../types/time";
 
 export abstract class EditableElement {
   public locked = false;
+  public readonly id: ElementId;
 
   protected constructor(
-    public readonly id: ElementId,
     public row: RowIndex,
     private _startTick: Tick,
     private _durationTicks: Tick,
+    id: ElementId = crypto.randomUUID(),
   ) {
+    this.id = id;
     this.validateTiming(_startTick, _durationTicks);
   }
 

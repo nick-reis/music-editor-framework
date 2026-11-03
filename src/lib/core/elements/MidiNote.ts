@@ -7,11 +7,11 @@ export class MidiNote extends EditableElement {
   readonly resizable = true;
 
   constructor(
-    id: ElementId,
     row: RowIndex,
     startTick: Tick,
     durationTicks: Tick,
+    id?: ElementId,
   ) {
-    super(id, row, startTick, durationTicks);
+    super(row, startTick, durationTicks, id);
   }
 }

@@ -7,13 +7,13 @@ export class AudioClip extends EditableElement {
   readonly resizable = false;
 
   constructor(
-    id: ElementId,
     row: RowIndex,
     startTick: Tick,
     durationTicks: Tick,
     public readonly durationSeconds: Seconds,
+    id?: ElementId,
   ) {
-    super(id, row, startTick, durationTicks);
+    super(row, startTick, durationTicks, id);
 
     if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
       throw new Error("Invalid audio duration");
