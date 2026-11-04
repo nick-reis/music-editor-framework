@@ -15,7 +15,11 @@ export class ChangeEmitter<T> {
 
   emit(change: T): void {
     for (const listener of [...this.listeners]) {
-      listener(change);
+      try {
+        listener(change);
+      } catch (error) {
+        console.error("Change listener failed:", error);
+      }
     }
   }
 }
