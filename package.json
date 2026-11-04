@@ -11,8 +11,8 @@
     "dev": "npm run dev --workspace=@music-editor/demo",
     "build": "npm run build --workspace=@music-editor/demo",
     "preview": "npm run preview --workspace=@music-editor/demo",
-    "test": "npm run test --workspace=@music-editor/demo",
-    "check": "npm run check --workspace=@music-editor/demo",
+    "test": "npm run test --workspaces --if-present",
+    "check": "npm run check --workspace=@music-editor/core && npm run check --workspace=@music-editor/demo",
     "check:watch": "npm run check:watch --workspace=@music-editor/demo",
     "tauri": "npm run tauri --workspace=@music-editor/demo --"
   }
