@@ -18,10 +18,10 @@ describe("GridContainer change notifications", () => {
     container.onChange(listener);
     container.addGrid(createGrid());
 
-    expect(listener).toHaveBeenCalledExactlyOnceWith({
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
       type: "grid-added",
       gridId: "grid-1",
-    });
+    }]);
   });
 
   it("forwards element additions from child grids", () => {
@@ -32,14 +32,14 @@ describe("GridContainer change notifications", () => {
     container.onChange(listener);
     grid.addElement(new AudioClip(0, 0, 120, 1, "clip-1"));
 
-    expect(listener).toHaveBeenCalledExactlyOnceWith({
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
       type: "grid-changed",
       gridId: "grid-1",
       change: {
         type: "element-added",
         elementId: "clip-1",
       },
-    });
+    }]);
   });
 
   it("forwards element updates with their original metadata", () => {
@@ -54,7 +54,7 @@ describe("GridContainer change notifications", () => {
 
     clip.moveToTick(480);
 
-    expect(listener).toHaveBeenCalledExactlyOnceWith({
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
       type: "grid-changed",
       gridId: "grid-1",
       change: {
@@ -62,7 +62,7 @@ describe("GridContainer change notifications", () => {
         elementId: "clip-1",
         properties: ["startTick"],
       },
-    });
+    }]);
   });
 
   it("forwards element removals", () => {
@@ -77,14 +77,14 @@ describe("GridContainer change notifications", () => {
 
     grid.removeElement(clip.id);
 
-    expect(listener).toHaveBeenCalledExactlyOnceWith({
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
       type: "grid-changed",
       gridId: "grid-1",
       change: {
         type: "element-removed",
         elementId: "clip-1",
       },
-    });
+    }]);
   });
 
   it("emits an event when a grid is removed", () => {
@@ -95,10 +95,10 @@ describe("GridContainer change notifications", () => {
     container.onChange(listener);
     expect(container.removeGrid(grid.id)).toBe(true);
 
-    expect(listener).toHaveBeenCalledExactlyOnceWith({
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
       type: "grid-removed",
       gridId: "grid-1",
-    });
+    }]);
   });
 
   it("stops forwarding changes from removed grids", () => {
@@ -168,14 +168,14 @@ describe("GridContainer change notifications", () => {
     oldGrid.addElement(new AudioClip(0, 0, 120, 1, "old"));
     newGrid.addElement(new AudioClip(0, 0, 120, 1, "new"));
 
-    expect(listener).toHaveBeenCalledExactlyOnceWith({
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
       type: "grid-changed",
       gridId: "grid-1",
       change: {
         type: "element-added",
         elementId: "new",
       },
-    });
+    }]);
   });
 
   it("supports unsubscribing from container notifications", () => {

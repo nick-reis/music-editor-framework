@@ -1,7 +1,8 @@
-import { ChangeEmitter } from "../events/ChangeEmitter";
-import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
-import type { WorkspaceChange } from "../events/ModelChange";
+import { ChangeBatchEmitter } from "../events/ChangeBatchEmitter";
 
+import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
+
+import type { WorkspaceChange } from "../events/ModelChange";
 import type { WorkspaceId, GridContainerId } from "../types/ids";
 
 import { GridContainer } from "../grids/GridContainer";
@@ -14,7 +15,7 @@ export class EditorWorkspace {
 
   private readonly containers = new Map<GridContainerId, GridContainer>();
 
-  private readonly changes = new ChangeEmitter<WorkspaceChange>();
+  private readonly changes = new ChangeBatchEmitter<WorkspaceChange>();
 
   private readonly containerSubscriptions = new Map<
     GridContainerId,
@@ -32,8 +33,12 @@ export class EditorWorkspace {
     }
   }
 
-  onChange(listener: ChangeListener<WorkspaceChange>): Unsubscribe {
-    return this.changes.subscribe(listener);
+  onChange(listener: ChangeListener<readonly WorkspaceChange[]>): Unsubscribe {
+    return this.changes.onChange(listener);
+  }
+
+  batchChanges<R>(operation: () => R): R {
+    return this.changes.batch(operation);
   }
 
   addContainer(container: GridContainer): void {
@@ -43,11 +48,15 @@ export class EditorWorkspace {
 
     this.containers.set(container.id, container);
 
-    const unsubscribe = container.onChange((change) => {
-      this.changes.emit({
-        type: "container-changed",
-        containerId: container.id,
-        change,
+    const unsubscribe = container.onChange((changes) => {
+      this.changes.batch(() => {
+        for (const change of changes) {
+          this.changes.emit({
+            type: "container-changed",
+            containerId: container.id,
+            change,
+          });
+        }
       });
     });
 

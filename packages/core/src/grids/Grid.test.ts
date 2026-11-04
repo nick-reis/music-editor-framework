@@ -75,13 +75,13 @@ describe("Grid", () => {
       grid.addElement(new MidiNote(1, 120, 120, "note-1")),
     ).toThrow("Element note-1 already exists");
     expect(() => grid.addElement(new MidiNote(-1, 0, 120, "negative"))).toThrow(
-      "Element row is outside grid bounds",
+      "Element row must be a non-negative integer",
     );
     expect(() => grid.addElement(new MidiNote(2, 0, 120, "too-large"))).toThrow(
       "Element row is outside grid bounds",
     );
     expect(() =>
       grid.addElement(new MidiNote(0.5, 0, 120, "fractional")),
-    ).toThrow("Element row is outside grid bounds");
+    ).toThrow("Element row must be a non-negative integer");
   });
 });

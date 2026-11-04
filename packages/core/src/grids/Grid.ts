@@ -1,7 +1,8 @@
-import { ChangeEmitter } from "../events/ChangeEmitter";
-import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
-import type { GridChange } from "../events/ModelChange";
+import { ChangeBatchEmitter } from "../events/ChangeBatchEmitter";
 
+import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
+
+import type { GridChange } from "../events/ModelChange";
 import type { GridId, ElementId } from "../types/ids";
 import type { ToolId } from "../tools/ToolId";
 import type { EditableElement } from "../elements/EditableElement";
@@ -16,7 +17,7 @@ export abstract class Grid<
 
   protected readonly elements = new Map<ElementId, TElement>();
 
-  private readonly changes = new ChangeEmitter<GridChange>();
+  private readonly changes = new ChangeBatchEmitter<GridChange>();
 
   private readonly elementSubscriptions = new Map<ElementId, Unsubscribe>();
 
@@ -42,8 +43,12 @@ export abstract class Grid<
 
   abstract readonly toolFallbacks: Readonly<Partial<Record<ToolId, ToolId>>>;
 
-  onChange(listener: ChangeListener<GridChange>): Unsubscribe {
-    return this.changes.subscribe(listener);
+  onChange(listener: ChangeListener<readonly GridChange[]>): Unsubscribe {
+    return this.changes.onChange(listener);
+  }
+
+  batchChanges<R>(operation: () => R): R {
+    return this.changes.batch(operation);
   }
 
   get rowCount(): number {
@@ -59,13 +64,8 @@ export abstract class Grid<
       throw new Error(`Element ${element.id} already exists`);
     }
 
-    if (
-      !Number.isInteger(element.row) ||
-      element.row < 0 ||
-      element.row >= this.rowCount
-    ) {
-      throw new Error("Element row is outside grid bounds");
-    }
+    // Validates ownership and row bounds before insertion.
+    element.attachToGrid(this);
 
     this.elements.set(element.id, element);
 
@@ -86,9 +86,13 @@ export abstract class Grid<
   }
 
   removeElement(id: ElementId): boolean {
-    if (!this.elements.has(id)) {
+    const element = this.elements.get(id);
+
+    if (!element) {
       return false;
     }
+
+    element.detachFromGrid(this);
 
     this.elementSubscriptions.get(id)?.();
     this.elementSubscriptions.delete(id);

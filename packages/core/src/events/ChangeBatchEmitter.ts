@@ -1,0 +1,45 @@
+import { ChangeEmitter } from "./ChangeEmitter";
+import type { ChangeListener, Unsubscribe } from "./ChangeEmitter";
+
+export class ChangeBatchEmitter<T> {
+  private readonly changes = new ChangeEmitter<readonly T[]>();
+
+  private pending: T[] = [];
+  private depth = 0;
+
+  onChange(listener: ChangeListener<readonly T[]>): Unsubscribe {
+    return this.changes.subscribe(listener);
+  }
+
+  emit(change: T): void {
+    if (this.depth > 0) {
+      this.pending.push(change);
+      return;
+    }
+
+    this.changes.emit([change]);
+  }
+
+  batch<R>(operation: () => R): R {
+    this.depth++;
+
+    try {
+      return operation();
+    } finally {
+      this.depth--;
+
+      if (this.depth === 0) {
+        this.flush();
+      }
+    }
+  }
+
+  private flush(): void {
+    if (this.pending.length === 0) return;
+
+    const changes = this.pending;
+    this.pending = [];
+
+    this.changes.emit(changes);
+  }
+}

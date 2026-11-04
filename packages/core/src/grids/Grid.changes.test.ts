@@ -28,10 +28,10 @@ describe("Grid change notifications", () => {
     grid.onChange(listener);
     grid.addElement(new MidiNote(0, 120, 240, "note-1"));
 
-    expect(listener).toHaveBeenCalledExactlyOnceWith({
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
       type: "element-added",
       elementId: "note-1",
-    });
+    }]);
   });
 
   it("forwards element property changes", () => {
@@ -48,29 +48,29 @@ describe("Grid change notifications", () => {
     note.locked = true;
     note.row = 1;
 
-    expect(listener).toHaveBeenNthCalledWith(1, {
+    expect(listener).toHaveBeenNthCalledWith(1, [{
       type: "element-updated",
       elementId: "note-1",
       properties: ["startTick"],
-    });
+    }]);
 
-    expect(listener).toHaveBeenNthCalledWith(2, {
+    expect(listener).toHaveBeenNthCalledWith(2, [{
       type: "element-updated",
       elementId: "note-1",
       properties: ["durationTicks"],
-    });
+    }]);
 
-    expect(listener).toHaveBeenNthCalledWith(3, {
+    expect(listener).toHaveBeenNthCalledWith(3, [{
       type: "element-updated",
       elementId: "note-1",
       properties: ["locked"],
-    });
+    }]);
 
-    expect(listener).toHaveBeenNthCalledWith(4, {
+    expect(listener).toHaveBeenNthCalledWith(4, [{
       type: "element-updated",
       elementId: "note-1",
       properties: ["row"],
-    });
+    }]);
   });
 
   it("notifies when an element is removed", () => {
@@ -84,10 +84,10 @@ describe("Grid change notifications", () => {
 
     expect(grid.removeElement(note.id)).toBe(true);
 
-    expect(listener).toHaveBeenCalledExactlyOnceWith({
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
       type: "element-removed",
       elementId: "note-1",
-    });
+    }]);
   });
 
   it("stops forwarding changes after removal", () => {
@@ -175,11 +175,11 @@ describe("Grid change notifications", () => {
 
     note.moveToTick(480);
 
-    expect(listener).toHaveBeenCalledExactlyOnceWith({
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
       type: "element-updated",
       elementId: "note-1",
       properties: ["startTick"],
-    });
+    }]);
   });
 
   it("does not forward changes from a replaced element", () => {
@@ -197,11 +197,11 @@ describe("Grid change notifications", () => {
     oldNote.moveToTick(480);
     newNote.moveToTick(960);
 
-    expect(listener).toHaveBeenCalledExactlyOnceWith({
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
       type: "element-updated",
       elementId: "note-1",
       properties: ["startTick"],
-    });
+    }]);
   });
 
   it("supports AudioGrid through the same base implementation", () => {
@@ -219,14 +219,24 @@ describe("Grid change notifications", () => {
 
     clip.syncToTempo(240);
 
-    expect(listener).toHaveBeenCalledExactlyOnceWith({
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
       type: "element-updated",
       elementId: "clip-1",
       properties: ["durationTicks"],
-    });
+    }]);
   });
 
-  it.todo(
-    "rejects out-of-range row assignments on attached elements",
-  );
+  it("rejects out-of-range row assignments on attached elements", () => {
+    const grid = new TestGrid();
+    const note = new MidiNote(0, 0, 120, "note-1");
+    grid.addElement(note);
+    const listener = vi.fn();
+    grid.onChange(listener);
+
+    expect(() => { note.row = grid.rowCount; }).toThrow(
+      "Element row is outside grid bounds",
+    );
+    expect(note.row).toBe(0);
+    expect(listener).not.toHaveBeenCalled();
+  });
 });

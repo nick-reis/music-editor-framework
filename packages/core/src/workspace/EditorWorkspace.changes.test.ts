@@ -31,10 +31,10 @@ describe("EditorWorkspace change notifications", () => {
       new GridContainer([], "container-1"),
     );
 
-    expect(listener).toHaveBeenCalledExactlyOnceWith({
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
       type: "container-added",
       containerId: "container-1",
-    });
+    }]);
   });
 
   it("notifies when a container is removed", () => {
@@ -44,10 +44,10 @@ describe("EditorWorkspace change notifications", () => {
     workspace.onChange(listener);
     workspace.removeContainer(container.id);
 
-    expect(listener).toHaveBeenCalledExactlyOnceWith({
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
       type: "container-removed",
       containerId: "container-1",
-    });
+    }]);
   });
 
   it("propagates element additions through the entire hierarchy", () => {
@@ -57,7 +57,7 @@ describe("EditorWorkspace change notifications", () => {
     workspace.onChange(listener);
     grid.addElement(clip);
 
-    expect(listener).toHaveBeenCalledExactlyOnceWith({
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
       type: "container-changed",
       containerId: "container-1",
       change: {
@@ -68,7 +68,7 @@ describe("EditorWorkspace change notifications", () => {
           elementId: "clip-1",
         },
       },
-    });
+    }]);
   });
 
   it("propagates element updates with property metadata", () => {
@@ -81,7 +81,7 @@ describe("EditorWorkspace change notifications", () => {
 
     clip.moveToTick(480);
 
-    expect(listener).toHaveBeenCalledExactlyOnceWith({
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
       type: "container-changed",
       containerId: "container-1",
       change: {
@@ -93,7 +93,7 @@ describe("EditorWorkspace change notifications", () => {
           properties: ["startTick"],
         },
       },
-    });
+    }]);
   });
 
   it("propagates element removals", () => {
@@ -106,7 +106,7 @@ describe("EditorWorkspace change notifications", () => {
 
     grid.removeElement(clip.id);
 
-    expect(listener).toHaveBeenCalledExactlyOnceWith({
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
       type: "container-changed",
       containerId: "container-1",
       change: {
@@ -117,7 +117,7 @@ describe("EditorWorkspace change notifications", () => {
           elementId: "clip-1",
         },
       },
-    });
+    }]);
   });
 
   it("stops forwarding changes after removing a container", () => {
@@ -180,14 +180,14 @@ describe("EditorWorkspace change notifications", () => {
       ),
     );
 
-    expect(listener).toHaveBeenCalledExactlyOnceWith({
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
       type: "container-changed",
       containerId: "container-1",
       change: {
         type: "grid-added",
         gridId: "new-grid",
       },
-    });
+    }]);
   });
 
   it("does not notify for unsuccessful removals", () => {
