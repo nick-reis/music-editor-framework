@@ -1,3 +1,7 @@
+import { ChangeEmitter } from "../events/ChangeEmitter";
+import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
+import type { GridChange } from "../events/ModelChange";
+
 import type { GridId, ElementId } from "../types/ids";
 import type { ToolId } from "../tools/ToolId";
 import type { EditableElement } from "../elements/EditableElement";
@@ -8,10 +12,13 @@ export abstract class Grid<
   TRow extends GridRow = GridRow,
 > {
   public readonly id: GridId;
-
   public readonly rows: readonly TRow[];
 
   protected readonly elements = new Map<ElementId, TElement>();
+
+  private readonly changes = new ChangeEmitter<GridChange>();
+
+  private readonly elementSubscriptions = new Map<ElementId, Unsubscribe>();
 
   protected constructor(
     rows: readonly TRow[],
@@ -35,6 +42,10 @@ export abstract class Grid<
 
   abstract readonly toolFallbacks: Readonly<Partial<Record<ToolId, ToolId>>>;
 
+  onChange(listener: ChangeListener<GridChange>): Unsubscribe {
+    return this.changes.subscribe(listener);
+  }
+
   get rowCount(): number {
     return this.rows.length;
   }
@@ -57,10 +68,38 @@ export abstract class Grid<
     }
 
     this.elements.set(element.id, element);
+
+    const unsubscribe = element.onChange((change) => {
+      this.changes.emit({
+        type: "element-updated",
+        elementId: change.elementId,
+        properties: change.properties,
+      });
+    });
+
+    this.elementSubscriptions.set(element.id, unsubscribe);
+
+    this.changes.emit({
+      type: "element-added",
+      elementId: element.id,
+    });
   }
 
   removeElement(id: ElementId): boolean {
-    return this.elements.delete(id);
+    if (!this.elements.has(id)) {
+      return false;
+    }
+
+    this.elementSubscriptions.get(id)?.();
+    this.elementSubscriptions.delete(id);
+    this.elements.delete(id);
+
+    this.changes.emit({
+      type: "element-removed",
+      elementId: id,
+    });
+
+    return true;
   }
 
   getElement(id: ElementId): TElement | undefined {

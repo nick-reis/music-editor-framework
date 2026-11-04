@@ -15,21 +15,39 @@ export { SelectionManager } from "./managers/SelectionManager";
 export { ToolManager } from "./managers/ToolManager";
 export { Timeline } from "./timeline/Timeline";
 
+// Observation infrastructure
+export { ChangeEmitter } from "./events/ChangeEmitter";
+
+export type { ChangeListener, Unsubscribe } from "./events/ChangeEmitter";
+
+// Change contracts
+export type {
+  ElementState,
+  ChangedProperties,
+  ElementChange,
+  GridChange,
+  GridContainerChange,
+  WorkspaceChange,
+  SelectionChange,
+  ToolChange,
+  TimelineChange,
+} from "./events/ModelChange";
+
+// Tools
 export { ToolId } from "./tools/ToolId";
 export type { ToolId as ToolIdType } from "./tools/ToolId";
 
+// Identifiers
 export type {
   ElementId,
   GridId,
   GridContainerId,
-  WorkspaceId
+  WorkspaceId,
 } from "./types/ids";
 
-export type {
-  RowIndex,
-  GridPosition,
-  ScreenPoint
-} from "./types/coordinates";
+// Coordinates
+export type { RowIndex, GridPosition, ScreenPoint } from "./types/coordinates";
 
+// Time
 export { TICKS_PER_QUARTER_NOTE } from "./types/time";
 export type { Tick, Seconds, BPM } from "./types/time";
