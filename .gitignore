@@ -1,10 +1,11 @@
+
 # Node / Frontend Dependencies
 node_modules/
 npm-debug.log*
 
-# SvelteKit Specific
-/.svelte-kit/
-/build/
+# SvelteKit
+.svelte-kit/
+build/
 .output/
 
 # Vite / Build Tools
@@ -12,8 +13,8 @@ dist/
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 
-# Tauri / Rust Specific
-src-tauri/target/
+# Tauri / Rust
+**/src-tauri/target/
 
 # Environment Variables & Secrets
 .env
