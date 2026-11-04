@@ -1,13 +1,15 @@
 import type { WorkspaceId, GridContainerId } from "../types/ids";
-
 import { GridContainer } from "../grids/GridContainer";
+import { SelectionManager } from "../managers/SelectionManager";
 
-//Eventually will own clipboard history per workspace and track selected elements
+//Eventually will own clipboard history per workspace
 
 export class EditorWorkspace {
   public readonly id: WorkspaceId;
 
   private readonly containers = new Map<GridContainerId, GridContainer>();
+
+  public readonly selection = new SelectionManager();
 
   constructor(
     containers: readonly GridContainer[] = [],

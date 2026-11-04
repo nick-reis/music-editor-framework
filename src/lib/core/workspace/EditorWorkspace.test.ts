@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MidiNote } from "../elements/MidiNote";
 import { GridContainer } from "../grids/GridContainer";
 import { EditorWorkspace } from "./EditorWorkspace";
 
@@ -59,5 +60,22 @@ describe("EditorWorkspace", () => {
     workspace.addContainer(second);
 
     expect(workspace.getContainers()).toEqual([first, second]);
+  });
+
+  it("maintains independent selections when workspaces share an element", () => {
+    const sharedElement = new MidiNote(0, 0, 120, "shared-element");
+    const firstWorkspace = new EditorWorkspace();
+    const secondWorkspace = new EditorWorkspace();
+
+    firstWorkspace.selection.select(sharedElement.id);
+
+    expect(firstWorkspace.selection.isSelected(sharedElement.id)).toBe(true);
+    expect(secondWorkspace.selection.isSelected(sharedElement.id)).toBe(false);
+
+    secondWorkspace.selection.select(sharedElement.id);
+    firstWorkspace.selection.deselect(sharedElement.id);
+
+    expect(firstWorkspace.selection.isSelected(sharedElement.id)).toBe(false);
+    expect(secondWorkspace.selection.isSelected(sharedElement.id)).toBe(true);
   });
 });
