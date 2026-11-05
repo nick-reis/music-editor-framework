@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Timeline } from "./Timeline";
+import { TICKS_PER_QUARTER_NOTE } from "../types/time";
 
 describe("Timeline", () => {
   it.each([
@@ -56,5 +57,163 @@ describe("Timeline", () => {
     expect(timeline.ticksToSeconds(240)).toBeCloseTo(0.25);
     expect(timeline.secondsToTicks(0)).toBe(0);
     expect(timeline.secondsToTicks(0.125)).toBeCloseTo(120);
+  });
+});
+
+describe("Timeline change notifications", () => {
+  it("initializes with the default BPM", () => {
+    const timeline = new Timeline();
+
+    expect(timeline.bpm).toBe(120);
+  });
+
+  it("accepts a custom initial BPM", () => {
+    const timeline = new Timeline(90);
+
+    expect(timeline.bpm).toBe(90);
+  });
+
+  it("notifies listeners when BPM changes", () => {
+    const timeline = new Timeline(120);
+    const listener = vi.fn();
+
+    timeline.onChange(listener);
+    timeline.setBpm(140);
+
+    expect(timeline.bpm).toBe(140);
+
+    expect(listener).toHaveBeenCalledExactlyOnceWith({
+      previousBpm: 120,
+      bpm: 140,
+    });
+  });
+
+  it("reports consecutive BPM changes correctly", () => {
+    const timeline = new Timeline(120);
+    const listener = vi.fn();
+
+    timeline.onChange(listener);
+
+    timeline.setBpm(140);
+    timeline.setBpm(90);
+
+    expect(listener).toHaveBeenNthCalledWith(1, {
+      previousBpm: 120,
+      bpm: 140,
+    });
+
+    expect(listener).toHaveBeenNthCalledWith(2, {
+      previousBpm: 140,
+      bpm: 90,
+    });
+  });
+
+  it("does not notify when BPM is unchanged", () => {
+    const timeline = new Timeline(120);
+    const listener = vi.fn();
+
+    timeline.onChange(listener);
+    timeline.setBpm(120);
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    0,
+    -120,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+  ])("rejects invalid BPM during construction (%s)", (bpm) => {
+    expect(() => new Timeline(bpm)).toThrow(
+      "BPM must be a positive finite number",
+    );
+  });
+
+  it("rejects invalid BPM without changing state or notifying", () => {
+    const timeline = new Timeline(120);
+    const listener = vi.fn();
+
+    timeline.onChange(listener);
+
+    expect(() => timeline.setBpm(-10)).toThrow();
+    expect(() => timeline.setBpm(Number.NaN)).toThrow();
+    expect(() => timeline.setBpm(Number.POSITIVE_INFINITY)).toThrow();
+
+    expect(timeline.bpm).toBe(120);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("stops notifying listeners after unsubscribing", () => {
+    const timeline = new Timeline(120);
+    const listener = vi.fn();
+
+    const unsubscribe = timeline.onChange(listener);
+
+    timeline.setBpm(140);
+    unsubscribe();
+    timeline.setBpm(160);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("supports multiple independent subscribers", () => {
+    const timeline = new Timeline(120);
+    const first = vi.fn();
+    const second = vi.fn();
+
+    const unsubscribe = timeline.onChange(first);
+    timeline.onChange(second);
+
+    timeline.setBpm(140);
+    unsubscribe();
+    timeline.setBpm(160);
+
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(2);
+  });
+
+  it("converts ticks to seconds using the current BPM", () => {
+    const timeline = new Timeline(120);
+    const quarterNote = TICKS_PER_QUARTER_NOTE;
+
+    expect(timeline.ticksToSeconds(quarterNote)).toBeCloseTo(0.5);
+
+    timeline.setBpm(60);
+
+    expect(timeline.ticksToSeconds(quarterNote)).toBeCloseTo(1);
+  });
+
+  it("converts seconds to ticks using the current BPM", () => {
+    const timeline = new Timeline(120);
+    const quarterNote = TICKS_PER_QUARTER_NOTE;
+
+    expect(timeline.secondsToTicks(0.5)).toBeCloseTo(quarterNote);
+
+    timeline.setBpm(60);
+
+    expect(timeline.secondsToTicks(0.5)).toBeCloseTo(quarterNote / 2);
+  });
+
+  it("preserves timing through round-trip conversions", () => {
+    const timeline = new Timeline(137);
+    const originalTicks = 1920;
+
+    const seconds = timeline.ticksToSeconds(originalTicks);
+    const restoredTicks = timeline.secondsToTicks(seconds);
+
+    expect(restoredTicks).toBeCloseTo(originalTicks);
+  });
+
+  it("does not emit events during time conversions", () => {
+    const timeline = new Timeline(120);
+    const listener = vi.fn();
+
+    timeline.onChange(listener);
+
+    timeline.ticksToSeconds(480);
+    timeline.secondsToTicks(2);
+
+    expect(listener).not.toHaveBeenCalled();
   });
 });

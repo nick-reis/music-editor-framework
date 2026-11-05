@@ -2,11 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { MidiNote } from "../elements/MidiNote";
 import { SelectionManager } from "./SelectionManager";
 
-function note(id: string): MidiNote {
-  return new MidiNote(0, 0, 120, id);
-}
-
 describe("SelectionManager change notifications", () => {
+  function note(id: string): MidiNote {
+    return new MidiNote(0, 0, 120, id);
+  }
+
   it("notifies when an element is selected", () => {
     const selection = new SelectionManager();
     const element = note("note-1");
