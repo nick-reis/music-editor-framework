@@ -149,4 +149,91 @@ describe("Hierarchical notification batching", () => {
     expect(workspaceListener).toHaveBeenCalledTimes(1);
     expect(workspaceListener.mock.calls[0][0]).toHaveLength(2);
   });
+
+  it("notifies every grid observer before dispatching listener-initiated mutations", () => {
+    const grid = createGrid("midi");
+    const first = new MidiNote(0, 0, 120, "first");
+    const second = new MidiNote(0, 0, 120, "second");
+    grid.addElement(first);
+    grid.addElement(second);
+    const container = new GridContainer([grid], "container");
+    const workspace = new EditorWorkspace([container], "workspace");
+    const observerOrder: string[] = [];
+    const workspaceListener = vi.fn();
+    workspace.onChange(workspaceListener);
+
+    grid.onChange((changes) => {
+      const change = changes[0];
+      observerOrder.push("A:" + change.elementId);
+      if (change.type === "element-updated" && change.elementId === "first") {
+        second.moveToTick(960);
+      }
+    });
+    grid.onChange((changes) => {
+      observerOrder.push("B:" + changes[0].elementId);
+    });
+
+    first.moveToTick(480);
+
+    expect(observerOrder).toEqual([
+      "A:first",
+      "B:first",
+      "A:second",
+      "B:second",
+    ]);
+    expect(first.startTick).toBe(480);
+    expect(second.startTick).toBe(960);
+    expect(workspaceListener.mock.calls).toHaveLength(2);
+    expect(workspaceListener).toHaveBeenNthCalledWith(1, [
+      {
+        type: "container-changed",
+        containerId: "container",
+        change: {
+          type: "grid-changed",
+          gridId: "midi",
+          change: {
+            type: "element-updated",
+            elementId: "first",
+            properties: ["startTick"],
+          },
+        },
+      },
+    ]);
+    expect(workspaceListener).toHaveBeenNthCalledWith(2, [
+      {
+        type: "container-changed",
+        containerId: "container",
+        change: {
+          type: "grid-changed",
+          gridId: "midi",
+          change: {
+            type: "element-updated",
+            elementId: "second",
+            properties: ["startTick"],
+          },
+        },
+      },
+    ]);
+  });
+
+  it("does not freeze the mutable model when sending batched changes", () => {
+    const grid = createGrid("midi");
+    const note = new MidiNote(0, 0, 120, "note");
+    grid.addElement(note);
+    const observer = vi.fn();
+    grid.onChange(observer);
+
+    grid.batchChanges(() => {
+      note.moveToTick(240);
+      note.row = 1;
+    });
+
+    const [changes] = observer.mock.calls[0];
+
+    expect(Object.isFrozen(changes)).toBe(true);
+    expect(Object.isFrozen(note)).toBe(false);
+    note.moveToTick(480);
+    expect(note.startTick).toBe(480);
+  });
+
 });

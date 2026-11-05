@@ -17,7 +17,7 @@ export class ChangeBatchEmitter<T> {
       return;
     }
 
-    this.changes.emit([change]);
+    this.changes.emit(Object.freeze([change]));
   }
 
   batch<R>(operation: () => R): R {
@@ -37,7 +37,7 @@ export class ChangeBatchEmitter<T> {
   private flush(): void {
     if (this.pending.length === 0) return;
 
-    const changes = this.pending;
+    const changes = Object.freeze([...this.pending]);
     this.pending = [];
 
     this.changes.emit(changes);
