@@ -889,3 +889,94 @@ describe("GridContainer scoped history isolation", () => {
     expect(right.second.getGrids()).toEqual([]);
   });
 });
+
+
+describe("GridContainer ownership encapsulation", () => {
+  const rows = [{ id: "c4", label: "C4", pitch: 60 }];
+
+  it("does not expose grid ownership hooks or a writable container parent", () => {
+    const piano = new MidiGrid(rows, "piano");
+    const source = new GridContainer([piano], "source");
+    const target = new GridContainer([], "target");
+
+    expect("_attachToContainer" in piano).toBe(false);
+    expect("_detachFromContainer" in piano).toBe(false);
+    expect("_reparentToContainer" in piano).toBe(false);
+    expect(Reflect.set(piano, "container", target)).toBe(false);
+    expect(piano.container).toBe(source);
+    expect(source.getGrid(piano.id)).toBe(piano);
+    expect(target.getGrid(piano.id)).toBeUndefined();
+  });
+
+  it("leaves grid membership and listeners intact on a failed duplicate transfer", () => {
+    const original = new MidiGrid(rows, "same");
+    const conflicting = new MidiGrid(rows, "same");
+    const source = new GridContainer([original], "source");
+    const target = new GridContainer([conflicting], "target");
+    const note = new MidiNote(0, 0, 120, "note");
+    original.addElement(note);
+    const sourceListener = vi.fn();
+    const targetListener = vi.fn();
+    source.onChange(sourceListener);
+    target.onChange(targetListener);
+
+    expect(() => source.transferGridTo(original, target)).toThrow(/already exists/);
+    expect(original.container).toBe(source);
+    expect(conflicting.container).toBe(target);
+    expect(note.grid).toBe(original);
+
+    note.moveToTick(240);
+    expect(sourceListener).toHaveBeenCalledTimes(1);
+    expect(targetListener).not.toHaveBeenCalled();
+  });
+
+  it("keeps one active subscriber after repeated transfers and reattachment", () => {
+    const piano = new MidiGrid(rows, "piano");
+    const note = new MidiNote(0, 0, 120, "note");
+    piano.addElement(note);
+    const first = new GridContainer([piano], "first");
+    const second = new GridContainer([], "second");
+    const workspace = new EditorWorkspace([first, second]);
+    const firstListener = vi.fn();
+    const secondListener = vi.fn();
+    first.onChange(firstListener);
+    second.onChange(secondListener);
+
+    workspace.moveGrid(piano, second);
+    workspace.moveGrid(piano, first);
+    workspace.moveGrid(piano, second);
+    firstListener.mockClear();
+    secondListener.mockClear();
+
+    note.moveToTick(480);
+
+    expect(piano.container).toBe(second);
+    expect(note.grid).toBe(piano);
+    expect(firstListener).not.toHaveBeenCalled();
+    expect(secondListener).toHaveBeenCalledExactlyOnceWith([{
+      type: "grid-changed",
+      gridId: "piano",
+      change: {
+        type: "element-updated",
+        elementId: note.id,
+        properties: ["startTick"],
+      },
+    }]);
+  });
+
+  it("keeps a locked grid attached when removal is refused", () => {
+    const piano = new MidiGrid(rows, "piano");
+    const note = new MidiNote(0, 0, 120, "locked");
+    piano.addElement(note);
+    note.locked = true;
+    const container = new GridContainer([piano], "tracks");
+    const listener = vi.fn();
+    container.onChange(listener);
+
+    expect(() => container.removeGrid(piano.id)).toThrow(/locked/);
+    expect(piano.container).toBe(container);
+    expect(note.grid).toBe(piano);
+    expect(container.getGrids()).toEqual([piano]);
+    expect(listener).not.toHaveBeenCalled();
+  });
+});

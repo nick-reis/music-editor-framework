@@ -1,5 +1,6 @@
 import { ChangeEmitter } from "../events/ChangeEmitter";
 import { MutationCapture } from "../mutations/MutationCapture";
+import { getElementGrid } from "../internal/ModelOwnership";
 
 import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
 import type {
@@ -26,7 +27,6 @@ export abstract class EditableElement<
   public readonly id: ElementId;
 
   private readonly changes = new ChangeEmitter<ElementChange>();
-  private owningGrid: Grid | null = null;
   private _state: Readonly<FullState<TExtra>>;
 
   protected constructor(
@@ -47,7 +47,7 @@ export abstract class EditableElement<
   abstract readonly resizable: boolean;
 
   get grid(): Grid | null {
-    return this.owningGrid;
+    return getElementGrid(this);
   }
 
   protected get state(): Readonly<FullState<TExtra>> {
@@ -207,7 +207,7 @@ export abstract class EditableElement<
       throw new Error("Element row must be a non-negative integer");
     }
 
-    if (this.owningGrid !== null && state.row >= this.owningGrid.rowCount) {
+    if (this.grid !== null && state.row >= this.grid.rowCount) {
       throw new Error("Element row is outside grid bounds");
     }
 
@@ -224,24 +224,5 @@ export abstract class EditableElement<
     }
   }
 
-  attachToGrid(grid: Grid): void {
-    if (this.owningGrid !== null) {
-      throw new Error(`Element ${this.id} already belongs to a grid`);
-    }
 
-    if (this._state.row >= grid.rowCount) {
-      throw new Error("Element row is outside grid bounds");
-    }
-
-    this.owningGrid = grid;
-  }
-
-  detachFromGrid(grid: Grid): void {
-    if (this.owningGrid !== grid) {
-      throw new Error(`Element ${this.id} does not belong to this grid`);
-    }
-
-    this.assertEditable();
-    this.owningGrid = null;
-  }
 }

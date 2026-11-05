@@ -646,3 +646,87 @@ describe("Grid structural mutation capture", () => {
     expect(oldNote.grid).toBeNull();
   });
 });
+
+
+describe("Grid ownership encapsulation", () => {
+  const rows = [{ id: "c4", label: "C4", pitch: 60 }];
+
+  it("does not expose element attachment methods or a writable grid parent", () => {
+    const piano = new MidiGrid(rows, "piano");
+    const guitar = new MidiGrid(rows, "guitar");
+    const note = new MidiNote(0, 0, 120, "note");
+    piano.addElement(note);
+
+    expect("attachToGrid" in note).toBe(false);
+    expect("detachFromGrid" in note).toBe(false);
+    expect(Reflect.set(note, "grid", guitar)).toBe(false);
+    expect(note.grid).toBe(piano);
+    expect(piano.getElement(note.id)).toBe(note);
+    expect(guitar.getElement(note.id)).toBeUndefined();
+  });
+
+  it("keeps element ownership untouched after an invalid row insertion", () => {
+    const piano = new MidiGrid(rows, "piano");
+    const note = new MidiNote(1, 0, 120, "invalid");
+    const listener = vi.fn();
+    piano.onChange(listener);
+
+    expect(() => piano.addElement(note)).toThrow(/outside grid bounds/);
+    expect(note.grid).toBeNull();
+    expect(piano.getElements()).toEqual([]);
+    expect(listener).not.toHaveBeenCalled();
+
+    note.row = 0;
+    piano.addElement(note);
+    expect(note.grid).toBe(piano);
+    expect(piano.getElements()).toEqual([note]);
+  });
+
+  it("preserves ownership and subscriptions when removing a locked element fails", () => {
+    const piano = new MidiGrid(rows, "piano");
+    const note = new MidiNote(0, 0, 120, "locked");
+    piano.addElement(note);
+    note.locked = true;
+    const listener = vi.fn();
+    piano.onChange(listener);
+
+    expect(() => piano.removeElement(note.id)).toThrow(/locked/);
+    expect(note.grid).toBe(piano);
+    expect(piano.getElement(note.id)).toBe(note);
+    expect(listener).not.toHaveBeenCalled();
+
+    note.locked = false;
+    note.moveToTick(240);
+    expect(listener).toHaveBeenCalledWith([{
+      type: "element-updated",
+      elementId: note.id,
+      properties: ["startTick"],
+    }]);
+  });
+
+  it("does not forward orphaned events after a note changes owners multiple times", () => {
+    const piano = new MidiGrid(rows, "piano");
+    const guitar = new MidiGrid(rows, "guitar");
+    const note = new MidiNote(0, 0, 120, "note");
+    const pianoListener = vi.fn();
+    const guitarListener = vi.fn();
+    piano.onChange(pianoListener);
+    guitar.onChange(guitarListener);
+
+    piano.addElement(note);
+    piano.removeElement(note.id);
+    guitar.addElement(note);
+    guitar.removeElement(note.id);
+    piano.addElement(note);
+    pianoListener.mockClear();
+    guitarListener.mockClear();
+
+    note.moveToTick(240);
+
+    expect(note.grid).toBe(piano);
+    expect(pianoListener).toHaveBeenCalledTimes(1);
+    expect(guitarListener).not.toHaveBeenCalled();
+    expect(piano.getElement(note.id)).toBe(note);
+    expect(guitar.getElement(note.id)).toBeUndefined();
+  });
+});

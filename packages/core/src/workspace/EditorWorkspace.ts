@@ -1,5 +1,6 @@
 import { ChangeBatchEmitter } from "../events/ChangeBatchEmitter";
 import { MutationCapture } from "../mutations/MutationCapture";
+import { attachContainerToWorkspace, detachContainerFromWorkspace } from "../internal/ModelOwnership";
 
 import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
 import type { WorkspaceChange } from "../events/ModelChange";
@@ -117,7 +118,7 @@ export class EditorWorkspace {
     });
 
     try {
-      container._attachToWorkspace(this);
+      attachContainerToWorkspace(container, this);
     } catch (error) {
       unsubscribe();
       throw error;
@@ -151,7 +152,7 @@ export class EditorWorkspace {
       }
     }
 
-    container._detachFromWorkspace(this);
+    detachContainerFromWorkspace(container, this);
 
     this.containerSubscriptions.get(id)?.();
     this.containerSubscriptions.delete(id);

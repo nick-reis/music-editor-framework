@@ -1114,3 +1114,84 @@ describe("EditorWorkspace scoped history behavior", () => {
     expect(b.note.startTick).toBe(480);
   });
 });
+
+
+describe("EditorWorkspace ownership encapsulation", () => {
+  const rows = [{ id: "c4", label: "C4", pitch: 60 }];
+
+  it("does not expose workspace attachment hooks or a writable parent", () => {
+    const container = new GridContainer([], "tracks");
+    const first = new EditorWorkspace([container], "first");
+    const second = new EditorWorkspace([], "second");
+
+    expect("_attachToWorkspace" in container).toBe(false);
+    expect("_detachFromWorkspace" in container).toBe(false);
+    expect(Reflect.set(container, "workspace", second)).toBe(false);
+    expect(container.workspace).toBe(first);
+    expect(first.getContainer(container.id)).toBe(container);
+    expect(second.getContainer(container.id)).toBeUndefined();
+  });
+
+  it("allows container reattachment between documents without forwarding stale events", () => {
+    const piano = new MidiGrid(rows, "piano");
+    const note = new MidiNote(0, 0, 120, "note");
+    piano.addElement(note);
+    const container = new GridContainer([piano], "tracks");
+    const first = new EditorWorkspace([container], "first");
+    const second = new EditorWorkspace([], "second");
+    const firstListener = vi.fn();
+    const secondListener = vi.fn();
+    first.onChange(firstListener);
+    second.onChange(secondListener);
+
+    expect(first.removeContainer(container.id)).toBe(true);
+    second.addContainer(container);
+    firstListener.mockClear();
+    secondListener.mockClear();
+    note.moveToTick(480);
+
+    expect(container.workspace).toBe(second);
+    expect(piano.container).toBe(container);
+    expect(note.grid).toBe(piano);
+    expect(first.getGrid(piano.id)).toBeUndefined();
+    expect(second.getGrid(piano.id)).toBe(piano);
+    expect(firstListener).not.toHaveBeenCalled();
+    expect(secondListener).toHaveBeenCalledTimes(1);
+  });
+
+  it("records a moved container's notes only in the new owning workspace", () => {
+    const piano = new MidiGrid(rows, "piano");
+    const note = new MidiNote(0, 0, 120, "note");
+    piano.addElement(note);
+    const container = new GridContainer([piano], "tracks");
+    const first = new EditorWorkspace([container], "first");
+    const second = new EditorWorkspace([], "second");
+
+    first.removeContainer(container.id);
+    second.addContainer(container);
+    second.history.execute("Move in second", () => note.moveToTick(240));
+
+    expect(second.history.canUndo).toBe(true);
+    expect(first.history.canUndo).toBe(false);
+    second.history.undo();
+    expect(note.startTick).toBe(0);
+    second.history.redo();
+    expect(note.startTick).toBe(240);
+  });
+
+  it("does not permit an attached container to be adopted by another workspace", () => {
+    const piano = new MidiGrid(rows, "piano");
+    const container = new GridContainer([piano], "tracks");
+    const first = new EditorWorkspace([container], "first");
+    const second = new EditorWorkspace([], "second");
+    const listener = vi.fn();
+    second.onChange(listener);
+
+    expect(() => second.addContainer(container)).toThrow(/already belongs to a workspace/);
+    expect(container.workspace).toBe(first);
+    expect(piano.container).toBe(container);
+    expect(first.getContainer(container.id)).toBe(container);
+    expect(second.getContainers()).toEqual([]);
+    expect(listener).not.toHaveBeenCalled();
+  });
+});

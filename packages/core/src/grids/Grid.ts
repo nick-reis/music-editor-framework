@@ -1,5 +1,6 @@
 import { ChangeBatchEmitter } from "../events/ChangeBatchEmitter";
 import { MutationCapture } from "../mutations/MutationCapture";
+import { attachElementToGrid, detachElementFromGrid, getGridContainer } from "../internal/ModelOwnership";
 
 import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
 import type { GridChange } from "../events/ModelChange";
@@ -18,12 +19,11 @@ export abstract class Grid<
   public readonly id: GridId;
   public readonly rows: readonly TRow[];
 
-  protected readonly elements = new Map<ElementId, TElement>();
+  private readonly elements = new Map<ElementId, TElement>();
 
   private readonly changes = new ChangeBatchEmitter<GridChange>();
   private readonly elementSubscriptions = new Map<ElementId, Unsubscribe>();
   private readonly membershipStates = new WeakMap<TElement, MembershipState>();
-  private _container: GridContainer | null = null;
 
   protected constructor(
     rows: readonly TRow[],
@@ -47,7 +47,7 @@ export abstract class Grid<
   abstract readonly toolFallbacks: Readonly<Partial<Record<ToolId, ToolId>>>;
 
   get container(): GridContainer | null {
-    return this._container;
+    return getGridContainer(this);
   }
 
   onChange(listener: ChangeListener<readonly GridChange[]>): Unsubscribe {
@@ -114,7 +114,7 @@ export abstract class Grid<
 
     MutationCapture.assertTarget(this);
 
-    element.attachToGrid(this);
+    attachElementToGrid(element, this);
 
     const ordered = [...this.elements.values()];
     ordered.splice(index, 0, element);
@@ -185,7 +185,7 @@ export abstract class Grid<
 
     const index = [...this.elements.keys()].indexOf(element.id);
 
-    element.detachFromGrid(this);
+    detachElementFromGrid(element, this);
 
     this.elementSubscriptions.get(element.id)?.();
     this.elementSubscriptions.delete(element.id);
@@ -210,27 +210,5 @@ export abstract class Grid<
     });
   }
 
-  _attachToContainer(container: GridContainer): void {
-    if (this._container !== null) {
-      throw new Error(`Grid ${this.id} already belongs to a container`);
-    }
 
-    this._container = container;
-  }
-
-  _detachFromContainer(container: GridContainer): void {
-    if (this._container !== container) {
-      throw new Error(`Grid ${this.id} does not belong to this container`);
-    }
-
-    this._container = null;
-  }
-
-  _reparentToContainer(source: GridContainer, target: GridContainer): void {
-    if (this._container !== source) {
-      throw new Error(`Grid ${this.id} does not belong to the source`);
-    }
-
-    this._container = target;
-  }
 }

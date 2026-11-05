@@ -1,5 +1,6 @@
 import { ChangeBatchEmitter } from "../events/ChangeBatchEmitter";
 import { MutationCapture } from "../mutations/MutationCapture";
+import { attachGridToContainer, detachGridFromContainer, getContainerWorkspace, reparentGridToContainer } from "../internal/ModelOwnership";
 
 import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
 import type { GridChange, GridContainerChange } from "../events/ModelChange";
@@ -15,7 +16,6 @@ export class GridContainer {
   private readonly grids = new Map<GridId, Grid>();
   private readonly changes = new ChangeBatchEmitter<GridContainerChange>();
   private readonly gridSubscriptions = new Map<GridId, Unsubscribe>();
-  private _workspace: EditorWorkspace | null = null;
   private structure: StructureState = Object.freeze({
     grids: Object.freeze([]),
   });
@@ -46,7 +46,7 @@ export class GridContainer {
   }
 
   get workspace(): EditorWorkspace | null {
-    return this._workspace;
+    return getContainerWorkspace(this);
   }
 
   onChange(
@@ -124,7 +124,7 @@ export class GridContainer {
       throw new Error(`Grid ${grid.id} does not belong to this container`);
     }
 
-    if (this._workspace !== target._workspace) {
+    if (this.workspace !== target.workspace) {
       throw new Error(
         "Grid transfers require the same workspace or detached containers",
       );
@@ -162,7 +162,7 @@ export class GridContainer {
     });
 
     const apply = () => {
-      grid._reparentToContainer(this, target);
+      reparentGridToContainer(grid, this, target);
 
       this.gridSubscriptions.get(grid.id)?.();
       this.gridSubscriptions.delete(grid.id);
@@ -211,8 +211,8 @@ export class GridContainer {
       target.changes.emit({ type: "grid-added", gridId: grid.id });
     };
 
-    if (this._workspace) {
-      this._workspace.batchChanges(apply);
+    if (this.workspace) {
+      this.workspace.batchChanges(apply);
     } else {
       apply();
     }
@@ -230,26 +230,8 @@ export class GridContainer {
     return this.grids.size;
   }
 
-  _attachToWorkspace(workspace: EditorWorkspace): void {
-    if (this._workspace !== null) {
-      throw new Error(
-        `GridContainer ${this.id} already belongs to a workspace`,
-      );
-    }
-    this._workspace = workspace;
-  }
-
-  _detachFromWorkspace(workspace: EditorWorkspace): void {
-    if (this._workspace !== workspace) {
-      throw new Error(
-        `GridContainer ${this.id} does not belong to this workspace`,
-      );
-    }
-    this._workspace = null;
-  }
-
   private insertGrid(grid: Grid, index: number, track = true): void {
-    if (this.grids.has(grid.id) || this._workspace?.getGrid(grid.id)) {
+    if (this.grids.has(grid.id) || this.workspace?.getGrid(grid.id)) {
       throw new Error(`Grid ${grid.id} already exists`);
     }
 
@@ -268,7 +250,7 @@ export class GridContainer {
     });
 
     try {
-      grid._attachToContainer(this);
+      attachGridToContainer(grid, this);
     } catch (error) {
       unsubscribe();
       throw error;
@@ -313,7 +295,7 @@ export class GridContainer {
     const before = this.structure;
     const index = [...this.grids.keys()].indexOf(grid.id);
 
-    grid._detachFromContainer(this);
+    detachGridFromContainer(grid, this);
     this.gridSubscriptions.get(grid.id)?.();
     this.gridSubscriptions.delete(grid.id);
     this.grids.delete(grid.id);
