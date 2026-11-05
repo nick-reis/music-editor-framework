@@ -12,6 +12,6 @@ export class MidiNote extends EditableElement {
     durationTicks: Tick,
     id?: ElementId,
   ) {
-    super(row, startTick, durationTicks, id);
+    super({ row, startTick, durationTicks }, id);
   }
 }

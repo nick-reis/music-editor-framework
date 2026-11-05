@@ -13,7 +13,7 @@ export class AudioClip extends EditableElement {
     public readonly durationSeconds: Seconds,
     id?: ElementId,
   ) {
-    super(row, startTick, durationTicks, id);
+    super({ row, startTick, durationTicks }, id);
 
     if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
       throw new Error("Invalid audio duration");

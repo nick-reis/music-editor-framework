@@ -10,17 +10,20 @@ export interface ElementState {
   locked: boolean;
 }
 
-export type ChangedProperties<TState> = readonly Extract<
-  keyof TState,
-  string
->[];
+export type ChangedProperties<
+  TState extends ElementState = ElementState & Record<string, unknown>,
+> = readonly Extract<keyof TState, string>[];
 
-export type ElementChange<TState extends ElementState = ElementState> = {
+export type ElementChange<
+  TState extends ElementState = ElementState & Record<string, unknown>,
+> = {
   readonly elementId: ElementId;
   readonly properties: ChangedProperties<TState>;
 };
 
-export type GridChange<TState extends ElementState = ElementState> =
+export type GridChange<
+  TState extends ElementState = ElementState & Record<string, unknown>,
+> =
   | {
       readonly type: "element-added";
       readonly elementId: ElementId;

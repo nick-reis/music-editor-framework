@@ -1,4 +1,5 @@
 import { ChangeEmitter } from "../events/ChangeEmitter";
+import { MutationCapture } from "../mutations/MutationCapture";
 
 import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
 import type {
@@ -12,26 +13,35 @@ import type { RowIndex } from "../types/coordinates";
 import type { Tick } from "../types/time";
 import type { Grid } from "../grids/Grid";
 
-export abstract class EditableElement {
+type FullState<TExtra extends object> = ElementState & TExtra;
+
+type InitialState<TExtra extends object> = Omit<ElementState, "locked"> &
+  TExtra & {
+    locked?: boolean;
+  };
+
+export abstract class EditableElement<
+  TExtra extends object = Record<never, never>,
+> {
   public readonly id: ElementId;
 
   private readonly changes = new ChangeEmitter<ElementChange>();
   private owningGrid: Grid | null = null;
+  private _state: Readonly<FullState<TExtra>>;
 
-  private _row: RowIndex;
-  private _locked = false;
-
-  constructor(
-    row: RowIndex,
-    private _startTick: Tick,
-    private _durationTicks: Tick,
+  protected constructor(
+    initialState: InitialState<TExtra>,
     id: ElementId = crypto.randomUUID(),
   ) {
-    this.validateRow(row);
-    this.validateTiming(_startTick, _durationTicks);
+    const state = Object.freeze({
+      locked: false,
+      ...initialState,
+    }) as Readonly<FullState<TExtra>>;
+
+    this.validateSharedState(state);
 
     this.id = id;
-    this._row = row;
+    this._state = state;
   }
 
   abstract readonly resizable: boolean;
@@ -40,11 +50,17 @@ export abstract class EditableElement {
     return this.owningGrid;
   }
 
+  protected get state(): Readonly<FullState<TExtra>> {
+    return this._state;
+  }
+
   onChange(listener: ChangeListener<ElementChange>): Unsubscribe {
     return this.changes.subscribe(listener);
   }
 
-  protected notifyChange(properties: ChangedProperties<ElementState>): void {
+  protected notifyChange(
+    properties: ChangedProperties<FullState<TExtra>>,
+  ): void {
     this.changes.emit({
       elementId: this.id,
       properties,
@@ -52,43 +68,25 @@ export abstract class EditableElement {
   }
 
   protected assertEditable(): void {
-    if (this._locked) {
+    if (this._state.locked) {
       throw new Error(`Element ${this.id} is locked`);
     }
   }
 
   get row(): RowIndex {
-    return this._row;
+    return this._state.row;
   }
 
   set row(value: RowIndex) {
-    this.validateRow(value);
-
-    if (this.owningGrid !== null && value >= this.owningGrid.rowCount) {
-      throw new Error("Element row is outside grid bounds");
-    }
-
-    if (this._row === value) return;
-
-    this.assertEditable();
-
-    this._row = value;
-    this.notifyChange(["row"]);
+    this.updateState({ row: value });
   }
 
   get locked(): boolean {
-    return this._locked;
+    return this._state.locked;
   }
 
   set locked(value: boolean) {
-    if (typeof value !== "boolean") {
-      throw new TypeError("Locked must be a boolean");
-    }
-
-    if (this._locked === value) return;
-
-    this._locked = value;
-    this.notifyChange(["locked"]);
+    this.updateState({ locked: value });
   }
 
   setLocked(value: boolean): void {
@@ -96,30 +94,23 @@ export abstract class EditableElement {
   }
 
   get startTick(): Tick {
-    return this._startTick;
+    return this._state.startTick;
   }
 
   get durationTicks(): Tick {
-    return this._durationTicks;
+    return this._state.durationTicks;
   }
 
   getStartTick(): Tick {
-    return this._startTick;
+    return this._state.startTick;
   }
 
   getEndTick(): Tick {
-    return this._startTick + this._durationTicks;
+    return this._state.startTick + this._state.durationTicks;
   }
 
   moveToTick(startTick: Tick): void {
-    this.validateTiming(startTick, this._durationTicks);
-
-    if (this._startTick === startTick) return;
-
-    this.assertEditable();
-
-    this._startTick = startTick;
-    this.notifyChange(["startTick"]);
+    this.updateState({ startTick });
   }
 
   resizeToDuration(durationTicks: Tick): void {
@@ -127,45 +118,109 @@ export abstract class EditableElement {
       throw new Error("Element cannot be resized");
     }
 
-    this.updateTiming(this._startTick, durationTicks);
+    this.updateState({ durationTicks });
   }
 
   protected updateTiming(startTick: Tick, durationTicks: Tick): void {
-    this.validateTiming(startTick, durationTicks);
+    this.updateState({ startTick, durationTicks });
+  }
 
-    const properties: (keyof ElementState)[] = [];
-
-    if (this._startTick !== startTick) {
-      properties.push("startTick");
+  protected updateState(patch: Partial<ElementState> | Partial<TExtra>): void {
+    for (const key of Object.keys(patch)) {
+      if (!Object.hasOwn(this._state, key)) {
+        throw new Error(`Unknown element state property: ${key}`);
+      }
     }
 
-    if (this._durationTicks !== durationTicks) {
-      properties.push("durationTicks");
-    }
+    const next = Object.freeze({
+      ...this._state,
+      ...patch,
+    }) as Readonly<FullState<TExtra>>;
+
+    this.applyState(next, true);
+  }
+
+  protected validateState(_next: Readonly<FullState<TExtra>>): void {}
+
+  private applyState(
+    next: Readonly<FullState<TExtra>>,
+    capture: boolean,
+  ): void {
+    const before = this._state;
+
+    const properties = (
+      Object.keys(before) as Extract<keyof FullState<TExtra>, string>[]
+    ).filter((key) => !Object.is(before[key], next[key]));
 
     if (properties.length === 0) return;
 
-    this.assertEditable();
+    this.validateSharedState(next);
+    this.validateState(next);
 
-    this._startTick = startTick;
-    this._durationTicks = durationTicks;
+    const changesLock = properties.includes("locked");
+    const changesOther = properties.some((property) => property !== "locked");
+
+    if (changesOther) {
+      this.assertEditable();
+    }
+
+    if (changesLock && changesOther) {
+      throw new Error("Lock status must be changed separately");
+    }
+
+    if (capture) {
+      MutationCapture.assertTarget(this);
+    }
+
+    this._state = next;
+
+    if (capture && MutationCapture.recording) {
+      MutationCapture.record({
+        target: this,
+        before,
+        after: next,
+        undo: () => this.restoreState(next, before),
+        redo: () => this.restoreState(before, next),
+      });
+    }
 
     this.notifyChange(properties);
   }
 
-  private validateTiming(startTick: Tick, durationTicks: Tick): void {
+  private restoreState(
+    expected: Readonly<FullState<TExtra>>,
+    target: Readonly<FullState<TExtra>>,
+  ): void {
+    if (MutationCapture.recording) {
+      throw new Error("Cannot replay during mutation capture");
+    }
+
+    if (this._state !== expected) {
+      throw new Error(`Element ${this.id} was modified outside this mutation`);
+    }
+
+    this.applyState(target, false);
+  }
+
+  private validateSharedState(state: Readonly<ElementState>): void {
+    if (!Number.isInteger(state.row) || state.row < 0) {
+      throw new Error("Element row must be a non-negative integer");
+    }
+
+    if (this.owningGrid !== null && state.row >= this.owningGrid.rowCount) {
+      throw new Error("Element row is outside grid bounds");
+    }
+
     if (
-      !Number.isFinite(startTick) ||
-      !Number.isFinite(durationTicks) ||
-      durationTicks <= 0
+      !Number.isFinite(state.startTick) ||
+      !Number.isFinite(state.durationTicks) ||
+      state.durationTicks <= 0
     ) {
       throw new Error("Invalid element timing");
     }
-  }
 
-  private validateRow(row: RowIndex): void {
-    if (!Number.isInteger(row) || row < 0) {
-      throw new Error("Element row must be a non-negative integer");
+    if (typeof state.locked !== "boolean") {
+      throw new TypeError("Locked must be a boolean");
     }
   }
 
@@ -174,7 +229,7 @@ export abstract class EditableElement {
       throw new Error(`Element ${this.id} already belongs to a grid`);
     }
 
-    if (this._row >= grid.rowCount) {
+    if (this._state.row >= grid.rowCount) {
       throw new Error("Element row is outside grid bounds");
     }
 
@@ -187,7 +242,6 @@ export abstract class EditableElement {
     }
 
     this.assertEditable();
-
     this.owningGrid = null;
   }
 }

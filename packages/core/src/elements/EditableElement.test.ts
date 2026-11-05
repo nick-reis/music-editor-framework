@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { MidiNote } from "./MidiNote";
 import { AudioClip } from "./AudioClip";
+import { EditableElement } from "./EditableElement";
+import { MutationCapture } from "../mutations/MutationCapture";
 
 describe("EditableElement behavior through MidiNote", () => {
   it("initializes identifiers, row, start tick, and duration", () => {
@@ -241,5 +243,147 @@ describe("EditableElement hard locking", () => {
     expect(() => clip.syncToTempo(960)).toThrow(/locked/i);
     expect(clip.durationSeconds).toBe(2);
     expect(clip.durationTicks).toBe(480);
+  });
+});
+
+
+describe("EditableElement custom state extension", () => {
+  class VelocityNote extends EditableElement<{ velocity: number }> {
+    readonly resizable = true;
+
+    constructor(velocity = 100, id = "velocity-note") {
+      super({
+        row: 0,
+        startTick: 0,
+        durationTicks: 120,
+        velocity,
+      }, id);
+    }
+
+    get velocity(): number {
+      return this.state.velocity;
+    }
+
+    set velocity(value: number) {
+      if (!Number.isInteger(value) || value < 0 || value > 127) {
+        throw new RangeError("Invalid velocity");
+      }
+
+      this.updateState({ velocity: value });
+    }
+
+    retime(startTick: number, durationTicks: number): void {
+      this.updateTiming(startTick, durationTicks);
+    }
+  }
+
+  it("initializes custom state while inheriting the shared element state", () => {
+    const note = new VelocityNote(90);
+
+    expect(note.velocity).toBe(90);
+    expect(note.startTick).toBe(0);
+    expect(note.durationTicks).toBe(120);
+    expect(note.locked).toBe(false);
+  });
+
+  it("updates custom properties through a normal setter", () => {
+    const note = new VelocityNote();
+    note.velocity = 112;
+    expect(note.velocity).toBe(112);
+  });
+
+  it("notifies observers when a custom state property changes", () => {
+    const note = new VelocityNote();
+    const listener = vi.fn();
+    note.onChange(listener);
+
+    note.velocity = 108;
+
+    expect(listener).toHaveBeenCalledExactlyOnceWith({
+      elementId: "velocity-note",
+      properties: ["velocity"],
+    });
+  });
+
+  it("captures custom property mutations without subclass history code", () => {
+    const note = new VelocityNote();
+    const capture = new MutationCapture();
+
+    capture.run(() => {
+      note.velocity = 110;
+      note.moveToTick(240);
+    });
+
+    expect(capture.mutations).toHaveLength(2);
+    expect(capture.mutations[0].before).toMatchObject({ velocity: 100 });
+    expect(capture.mutations[0].after).toMatchObject({ velocity: 110 });
+    expect(capture.mutations[1].before).toMatchObject({ startTick: 0 });
+    expect(capture.mutations[1].after).toMatchObject({ startTick: 240 });
+
+    for (const mutation of [...capture.mutations].reverse()) mutation.undo();
+    expect([note.velocity, note.startTick]).toEqual([100, 0]);
+
+    for (const mutation of capture.mutations) mutation.redo();
+    expect([note.velocity, note.startTick]).toEqual([110, 240]);
+  });
+
+  it("rejects invalid custom values before recording or notifying", () => {
+    const note = new VelocityNote();
+    const capture = new MutationCapture();
+    const listener = vi.fn();
+    note.onChange(listener);
+
+    capture.run(() => {
+      expect(() => { note.velocity = 128; }).toThrow("Invalid velocity");
+      expect(() => { note.velocity = -1; }).toThrow("Invalid velocity");
+      expect(() => { note.velocity = 1.5; }).toThrow("Invalid velocity");
+      expect(() => { note.velocity = Number.NaN; }).toThrow("Invalid velocity");
+    });
+
+    expect(note.velocity).toBe(100);
+    expect(capture.mutations).toHaveLength(0);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("prevents custom property changes on locked elements", () => {
+    const note = new VelocityNote();
+    note.locked = true;
+    const listener = vi.fn();
+    note.onChange(listener);
+
+    expect(() => { note.velocity = 101; }).toThrow(/locked/);
+    expect(note.velocity).toBe(100);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("does not produce a mutation for a no-op custom setter", () => {
+    const note = new VelocityNote(100);
+    const capture = new MutationCapture();
+    const listener = vi.fn();
+    note.onChange(listener);
+
+    capture.run(() => { note.velocity = 100; });
+
+    expect(capture.mutations).toHaveLength(0);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid shared timing in combined updates without partial changes", () => {
+    const note = new VelocityNote();
+    const listener = vi.fn();
+    note.onChange(listener);
+
+    expect(() => note.retime(480, -1)).toThrow("Invalid element timing");
+
+    expect(note.startTick).toBe(0);
+    expect(note.durationTicks).toBe(120);
+    expect(listener).not.toHaveBeenCalled();
+
+    note.retime(480, 240);
+    expect([note.startTick, note.durationTicks]).toEqual([480, 240]);
+    expect(listener).toHaveBeenCalledExactlyOnceWith({
+      elementId: "velocity-note",
+      properties: ["startTick", "durationTicks"],
+    });
   });
 });
