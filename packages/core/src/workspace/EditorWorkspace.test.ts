@@ -523,3 +523,142 @@ describe("EditorWorkspace ownership and selection lifecycle", () => {
     expect(piano.container).toBeNull();
   });
 });
+
+describe("EditorWorkspace history integration", () => {
+  function createWorkspace() {
+    const first = new MidiGrid([
+      { id: "c4", label: "C4", pitch: 60 },
+      { id: "d4", label: "D4", pitch: 62 },
+    ], "piano");
+    const second = new MidiGrid([
+      { id: "e4", label: "E4", pitch: 64 },
+      { id: "f4", label: "F4", pitch: 65 },
+    ], "guitar");
+    const container = new GridContainer([first, second], "tracks");
+    const workspace = new EditorWorkspace([container], "workspace");
+    return { first, second, container, workspace };
+  }
+
+  it("owns undo history separately from other workspaces", () => {
+    const left = createWorkspace();
+    const right = createWorkspace();
+    const noteLeft = new MidiNote(0, 0, 120, "same");
+    const noteRight = new MidiNote(0, 0, 120, "same");
+
+    left.first.addElement(noteLeft);
+    right.first.addElement(noteRight);
+    left.workspace.history.execute("Left edit", () => noteLeft.moveToTick(240));
+    right.workspace.history.execute("Right edit", () => noteRight.moveToTick(480));
+
+    left.workspace.history.undo();
+    expect(noteLeft.startTick).toBe(0);
+    expect(noteRight.startTick).toBe(480);
+    expect(right.workspace.history.canUndo).toBe(true);
+  });
+
+  it("groups edits across different grids even when their elements have equal IDs", () => {
+    const { first, second, workspace } = createWorkspace();
+    const left = new MidiNote(0, 0, 120, "same");
+    const right = new MidiNote(0, 0, 120, "same");
+    first.addElement(left);
+    second.addElement(right);
+
+    workspace.history.execute("Move both", () => {
+      left.moveToTick(240);
+      right.moveToTick(480);
+    });
+
+    workspace.history.undo();
+    expect([left.startTick, right.startTick]).toEqual([0, 0]);
+    workspace.history.redo();
+    expect([left.startTick, right.startTick]).toEqual([240, 480]);
+  });
+
+  it("rejects a detached element even if it shares an ID with an attached element", () => {
+    const { first, workspace } = createWorkspace();
+    const attached = new MidiNote(0, 0, 120, "same");
+    const detached = new MidiNote(0, 0, 120, "same");
+    first.addElement(attached);
+
+    expect(() => workspace.history.execute("Outsider", () => {
+      detached.moveToTick(240);
+    })).toThrow(/outside the recording scope/);
+
+    expect(detached.startTick).toBe(0);
+    expect(workspace.history.canUndo).toBe(false);
+  });
+
+  it("rolls back valid workspace edits before an out-of-workspace target", () => {
+    const left = createWorkspace();
+    const right = createWorkspace();
+    const inside = new MidiNote(0, 0, 120, "inside");
+    const outside = new MidiNote(0, 0, 120, "outside");
+    left.first.addElement(inside);
+    right.first.addElement(outside);
+
+    expect(() => left.workspace.history.execute("Invalid group", () => {
+      inside.moveToTick(240);
+      outside.moveToTick(480);
+    })).toThrow(/outside the recording scope/);
+
+    expect(inside.startTick).toBe(0);
+    expect(outside.startTick).toBe(0);
+    expect(left.workspace.history.canUndo).toBe(false);
+  });
+
+  it("keeps history valid when moving a grid between containers in the same workspace", () => {
+    const { first, workspace } = createWorkspace();
+    const destination = new GridContainer([], "other");
+    workspace.addContainer(destination);
+    const note = new MidiNote(0, 0, 120, "note");
+    first.addElement(note);
+
+    workspace.history.execute("Move", () => note.moveToTick(240));
+    workspace.moveGrid(first, destination);
+
+    expect(note.grid).toBe(first);
+    expect(workspace.getGrid(first.id)).toBe(first);
+    expect(workspace.history.undo()).toBe(true);
+    expect(note.startTick).toBe(0);
+  });
+
+  it("rejects replay after the edited grid is removed from the workspace", () => {
+    const { first, container, workspace } = createWorkspace();
+    const note = new MidiNote(0, 0, 120, "note");
+    first.addElement(note);
+
+    workspace.history.execute("Move", () => note.moveToTick(240));
+    container.removeGrid(first.id);
+
+    expect(() => workspace.history.undo()).toThrow(/outside the history scope/);
+    expect(note.startTick).toBe(240);
+    expect(workspace.history.canUndo).toBe(true);
+  });
+
+  it("accepts newly attached elements but not previously removed elements", () => {
+    const { first, workspace } = createWorkspace();
+    const oldNote = new MidiNote(0, 0, 120, "same");
+    const newNote = new MidiNote(0, 0, 120, "same");
+    first.addElement(oldNote);
+
+    workspace.history.execute("Old", () => oldNote.moveToTick(240));
+    first.removeElement(oldNote.id);
+    first.addElement(newNote);
+
+    expect(() => workspace.history.undo()).toThrow(/outside the history scope/);
+    expect(newNote.startTick).toBe(0);
+    expect(oldNote.startTick).toBe(240);
+  });
+
+  it("does not make direct edits undoable", () => {
+    const { first, workspace } = createWorkspace();
+    const note = new MidiNote(0, 0, 120, "note");
+    first.addElement(note);
+
+    note.moveToTick(240);
+
+    expect(workspace.history.canUndo).toBe(false);
+    expect(workspace.history.undo()).toBe(false);
+    expect(note.startTick).toBe(240);
+  });
+});

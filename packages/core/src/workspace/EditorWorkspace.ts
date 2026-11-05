@@ -8,9 +8,16 @@ import type { Grid } from "../grids/Grid";
 import { GridContainer } from "../grids/GridContainer";
 import { SelectionManager } from "../managers/SelectionManager";
 
+import { EditorHistory } from "../history/EditorHistory";
+import { EditableElement } from "../elements/EditableElement";
+
 export class EditorWorkspace {
   public readonly id: WorkspaceId;
   public readonly selection = new SelectionManager();
+
+  public readonly history = new EditorHistory((target) =>
+    this.ownsElement(target),
+  );
 
   private readonly containers = new Map<GridContainerId, GridContainer>();
   private readonly changes = new ChangeBatchEmitter<WorkspaceChange>();
@@ -196,6 +203,20 @@ export class EditorWorkspace {
           element.grid !== null &&
           this.getGrid(element.grid.id) === element.grid,
       ),
+    );
+  }
+
+  private ownsElement(target: object): boolean {
+    if (!(target instanceof EditableElement)) {
+      return false;
+    }
+
+    const grid = target.grid;
+
+    return (
+      grid !== null &&
+      this.getGrid(grid.id) === grid &&
+      grid.getElement(target.id) === target
     );
   }
 }

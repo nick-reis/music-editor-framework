@@ -51,3 +51,7 @@ export type { RowIndex, GridPosition, ScreenPoint } from "./types/coordinates";
 // Time
 export { TICKS_PER_QUARTER_NOTE } from "./types/time";
 export type { Tick, Seconds, BPM } from "./types/time";
+
+// History
+export { EditorHistory } from "./history/EditorHistory";
+export type { EditorHistoryChange } from "./history/EditorHistory";
