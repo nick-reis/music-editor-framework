@@ -1,13 +1,13 @@
 import { ChangeBatchEmitter } from "../events/ChangeBatchEmitter";
+import { MutationCapture } from "../mutations/MutationCapture";
 
 import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
 import type { WorkspaceChange } from "../events/ModelChange";
 import type { WorkspaceId, GridContainerId, GridId } from "../types/ids";
-import { Grid } from "../grids/Grid";
 
+import { Grid } from "../grids/Grid";
 import { GridContainer } from "../grids/GridContainer";
 import { SelectionManager } from "../managers/SelectionManager";
-
 import { EditorHistory } from "../history/EditorHistory";
 import { EditableElement } from "../elements/EditableElement";
 
@@ -72,6 +72,10 @@ export class EditorWorkspace {
   }
 
   addContainer(container: GridContainer): void {
+    if (MutationCapture.recording) {
+      throw new Error("Container additions are not undoable yet");
+    }
+
     if (this.containers.has(container.id)) {
       throw new Error(`GridContainer ${container.id} already exists`);
     }
@@ -129,6 +133,10 @@ export class EditorWorkspace {
 
     if (!container) return false;
 
+    if (MutationCapture.recording) {
+      throw new Error("Container removals are not undoable yet");
+    }
+
     for (const grid of container.getGrids()) {
       const lockedElement = grid
         .getElements()
@@ -182,6 +190,7 @@ export class EditorWorkspace {
   getGrid(id: GridId): Grid | undefined {
     for (const container of this.containers.values()) {
       const grid = container.getGrid(id);
+
       if (grid) return grid;
     }
 
@@ -207,6 +216,10 @@ export class EditorWorkspace {
   }
 
   private ownsTarget(target: object): boolean {
+    if (target instanceof GridContainer) {
+      return this.getContainer(target.id) === target;
+    }
+
     if (target instanceof Grid) {
       return this.getGrid(target.id) === target;
     }

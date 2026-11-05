@@ -1,10 +1,13 @@
 import { ChangeBatchEmitter } from "../events/ChangeBatchEmitter";
+import { MutationCapture } from "../mutations/MutationCapture";
 
 import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
 import type { GridChange, GridContainerChange } from "../events/ModelChange";
 import type { GridContainerId, GridId } from "../types/ids";
 import type { Grid } from "./Grid";
 import type { EditorWorkspace } from "../workspace/EditorWorkspace";
+
+type StructureState = Readonly<{ grids: readonly Grid[] }>;
 
 export class GridContainer {
   public readonly id: GridContainerId;
@@ -13,6 +16,9 @@ export class GridContainer {
   private readonly changes = new ChangeBatchEmitter<GridContainerChange>();
   private readonly gridSubscriptions = new Map<GridId, Unsubscribe>();
   private _workspace: EditorWorkspace | null = null;
+  private structure: StructureState = Object.freeze({
+    grids: Object.freeze([]),
+  });
 
   constructor(
     grids: readonly Grid[] = [],
@@ -35,7 +41,7 @@ export class GridContainer {
     }
 
     for (const grid of grids) {
-      this.addGrid(grid);
+      this.insertGrid(grid, this.gridCount, false);
     }
   }
 
@@ -54,56 +60,14 @@ export class GridContainer {
   }
 
   addGrid(grid: Grid): void {
-    if (this.grids.has(grid.id) || this._workspace?.getGrid(grid.id)) {
-      throw new Error(`Grid ${grid.id} already exists`);
-    }
-
-    if (grid.container !== null) {
-      throw new Error(`Grid ${grid.id} already belongs to a container`);
-    }
-
-    const unsubscribe = grid.onChange((changes) => {
-      this.emitGridChanges(grid.id, changes);
-    });
-
-    try {
-      grid._attachToContainer(this);
-    } catch (error) {
-      unsubscribe();
-      throw error;
-    }
-
-    this.grids.set(grid.id, grid);
-    this.gridSubscriptions.set(grid.id, unsubscribe);
-
-    this.changes.emit({
-      type: "grid-added",
-      gridId: grid.id,
-    });
+    this.insertGrid(grid, this.gridCount);
   }
 
   removeGrid(id: GridId): boolean {
     const grid = this.grids.get(id);
-
     if (!grid) return false;
 
-    const lockedElement = grid.getElements().find((element) => element.locked);
-
-    if (lockedElement) {
-      throw new Error(`Element ${lockedElement.id} is locked`);
-    }
-
-    grid._detachFromContainer(this);
-
-    this.gridSubscriptions.get(id)?.();
-    this.gridSubscriptions.delete(id);
-    this.grids.delete(id);
-
-    this.changes.emit({
-      type: "grid-removed",
-      gridId: id,
-    });
-
+    this.removeExactGrid(grid);
     return true;
   }
 
@@ -118,16 +82,33 @@ export class GridContainer {
 
     const ordered = [...this.grids.values()];
     const fromIndex = ordered.indexOf(grid);
-
     if (fromIndex === index) return;
+
+    MutationCapture.assertTarget(this);
+    const before = this.structure;
 
     ordered.splice(fromIndex, 1);
     ordered.splice(index, 0, grid);
 
     this.grids.clear();
+    for (const item of ordered) this.grids.set(item.id, item);
 
-    for (const item of ordered) {
-      this.grids.set(item.id, item);
+    const after = this.updateStructure();
+
+    if (MutationCapture.recording) {
+      MutationCapture.record({
+        target: this,
+        before,
+        after,
+        undo: () =>
+          this.replayStructure(after, before, () =>
+            this.reorderGrid(grid, fromIndex),
+          ),
+        redo: () =>
+          this.replayStructure(before, after, () =>
+            this.reorderGrid(grid, index),
+          ),
+      });
     }
 
     this.changes.emit({
@@ -150,15 +131,11 @@ export class GridContainer {
     }
 
     if (target === this) {
-      if (index !== undefined) {
-        this.reorderGrid(grid, index);
-      }
-
+      if (index !== undefined) this.reorderGrid(grid, index);
       return;
     }
 
     const insertAt = index ?? target.gridCount;
-
     if (
       !Number.isInteger(insertAt) ||
       insertAt < 0 ||
@@ -171,6 +148,12 @@ export class GridContainer {
       throw new Error(`Grid ${grid.id} already exists in destination`);
     }
 
+    MutationCapture.assertTarget(this);
+    MutationCapture.assertTarget(target);
+
+    const sourceIndex = [...this.grids.keys()].indexOf(grid.id);
+    const sourceBefore = this.structure;
+    const targetBefore = target.structure;
     const destinationGrids = [...target.grids.values()];
     destinationGrids.splice(insertAt, 0, grid);
 
@@ -186,22 +169,46 @@ export class GridContainer {
       this.grids.delete(grid.id);
 
       target.grids.clear();
-
       for (const item of destinationGrids) {
         target.grids.set(item.id, item);
       }
-
       target.gridSubscriptions.set(grid.id, destinationSubscription);
 
-      this.changes.emit({
-        type: "grid-removed",
-        gridId: grid.id,
-      });
+      const sourceAfter = this.updateStructure();
+      const targetAfter = target.updateStructure();
 
-      target.changes.emit({
-        type: "grid-added",
-        gridId: grid.id,
-      });
+      if (MutationCapture.recording) {
+        MutationCapture.record({
+          target: this,
+          before: Object.freeze({ source: sourceBefore, target: targetBefore }),
+          after: Object.freeze({ source: sourceAfter, target: targetAfter }),
+          undo: () =>
+            GridContainer.replayTransfer(
+              target,
+              this,
+              grid,
+              sourceIndex,
+              targetAfter,
+              sourceAfter,
+              targetBefore,
+              sourceBefore,
+            ),
+          redo: () =>
+            GridContainer.replayTransfer(
+              this,
+              target,
+              grid,
+              insertAt,
+              sourceBefore,
+              targetBefore,
+              sourceAfter,
+              targetAfter,
+            ),
+        });
+      }
+
+      this.changes.emit({ type: "grid-removed", gridId: grid.id });
+      target.changes.emit({ type: "grid-added", gridId: grid.id });
     };
 
     if (this._workspace) {
@@ -229,7 +236,6 @@ export class GridContainer {
         `GridContainer ${this.id} already belongs to a workspace`,
       );
     }
-
     this._workspace = workspace;
   }
 
@@ -239,8 +245,144 @@ export class GridContainer {
         `GridContainer ${this.id} does not belong to this workspace`,
       );
     }
-
     this._workspace = null;
+  }
+
+  private insertGrid(grid: Grid, index: number, track = true): void {
+    if (this.grids.has(grid.id) || this._workspace?.getGrid(grid.id)) {
+      throw new Error(`Grid ${grid.id} already exists`);
+    }
+
+    if (grid.container !== null) {
+      throw new Error(`Grid ${grid.id} already belongs to a container`);
+    }
+
+    if (!Number.isInteger(index) || index < 0 || index > this.gridCount) {
+      throw new RangeError("Invalid grid insertion index");
+    }
+
+    if (track) MutationCapture.assertTarget(this);
+    const before = this.structure;
+    const unsubscribe = grid.onChange((changes) => {
+      this.emitGridChanges(grid.id, changes);
+    });
+
+    try {
+      grid._attachToContainer(this);
+    } catch (error) {
+      unsubscribe();
+      throw error;
+    }
+
+    const ordered = [...this.grids.values()];
+    ordered.splice(index, 0, grid);
+    this.grids.clear();
+    for (const item of ordered) this.grids.set(item.id, item);
+    this.gridSubscriptions.set(grid.id, unsubscribe);
+
+    const after = this.updateStructure();
+
+    if (track && MutationCapture.recording) {
+      MutationCapture.record({
+        target: this,
+        before,
+        after,
+        undo: () =>
+          this.replayStructure(after, before, () => this.removeExactGrid(grid)),
+        redo: () =>
+          this.replayStructure(before, after, () =>
+            this.insertGrid(grid, index),
+          ),
+      });
+    }
+
+    this.changes.emit({ type: "grid-added", gridId: grid.id });
+  }
+
+  private removeExactGrid(grid: Grid): void {
+    if (this.grids.get(grid.id) !== grid) {
+      throw new Error(`Grid ${grid.id} is no longer the same container member`);
+    }
+
+    const lockedElement = grid.getElements().find((element) => element.locked);
+    if (lockedElement) {
+      throw new Error(`Element ${lockedElement.id} is locked`);
+    }
+
+    MutationCapture.assertTarget(this);
+    const before = this.structure;
+    const index = [...this.grids.keys()].indexOf(grid.id);
+
+    grid._detachFromContainer(this);
+    this.gridSubscriptions.get(grid.id)?.();
+    this.gridSubscriptions.delete(grid.id);
+    this.grids.delete(grid.id);
+
+    const after = this.updateStructure();
+
+    if (MutationCapture.recording) {
+      MutationCapture.record({
+        target: this,
+        before,
+        after,
+        undo: () =>
+          this.replayStructure(after, before, () =>
+            this.insertGrid(grid, index),
+          ),
+        redo: () =>
+          this.replayStructure(before, after, () => this.removeExactGrid(grid)),
+      });
+    }
+
+    this.changes.emit({ type: "grid-removed", gridId: grid.id });
+  }
+
+  private updateStructure(): StructureState {
+    this.structure = Object.freeze({
+      grids: Object.freeze([...this.grids.values()]),
+    });
+    return this.structure;
+  }
+
+  private replayStructure(
+    expected: StructureState,
+    restored: StructureState,
+    operation: () => void,
+  ): void {
+    if (MutationCapture.recording) {
+      throw new Error("Cannot replay during mutation capture");
+    }
+    this.assertStructure(expected);
+    operation();
+    this.structure = restored;
+  }
+
+  private assertStructure(expected: StructureState): void {
+    if (this.structure !== expected) {
+      throw new Error(
+        `GridContainer ${this.id} was modified outside this mutation`,
+      );
+    }
+  }
+
+  private static replayTransfer(
+    from: GridContainer,
+    to: GridContainer,
+    grid: Grid,
+    index: number,
+    expectedFrom: StructureState,
+    expectedTo: StructureState,
+    restoredFrom: StructureState,
+    restoredTo: StructureState,
+  ): void {
+    if (MutationCapture.recording) {
+      throw new Error("Cannot replay during mutation capture");
+    }
+    from.assertStructure(expectedFrom);
+    to.assertStructure(expectedTo);
+    from.transferGridTo(grid, to, index);
+    from.structure = restoredFrom;
+    to.structure = restoredTo;
   }
 
   private emitGridChanges(
@@ -249,11 +391,7 @@ export class GridContainer {
   ): void {
     this.changes.batch(() => {
       for (const change of changes) {
-        this.changes.emit({
-          type: "grid-changed",
-          gridId,
-          change,
-        });
+        this.changes.emit({ type: "grid-changed", gridId, change });
       }
     });
   }

@@ -499,3 +499,324 @@ describe("GridContainer ownership and transfers", () => {
     expect(second.container).toBeNull();
   });
 });
+
+describe("GridContainer history integration", () => {
+  const rows = [{ id: "row-1", label: "C4", pitch: 60 }];
+
+  function grid(id: string): MidiGrid {
+    return new MidiGrid(rows, id);
+  }
+
+  function setup() {
+    const first = new GridContainer([], "first");
+    const second = new GridContainer([], "second");
+    const workspace = new EditorWorkspace([first, second], "workspace");
+    return { first, second, workspace };
+  }
+
+  it("undoes and redoes adding a grid using the same grid object", () => {
+    const { first, workspace } = setup();
+    const piano = grid("piano");
+
+    workspace.history.execute("Add grid", () => first.addGrid(piano));
+
+    expect(first.getGrid("piano")).toBe(piano);
+    expect(piano.container).toBe(first);
+    expect(workspace.history.undoLabel).toBe("Add grid");
+
+    workspace.history.undo();
+    expect(first.getGrids()).toEqual([]);
+    expect(piano.container).toBeNull();
+
+    workspace.history.redo();
+    expect(first.getGrids()).toEqual([piano]);
+    expect(piano.container).toBe(first);
+  });
+
+  it("restores the original order when undoing the removal of a middle grid", () => {
+    const a = grid("a");
+    const b = grid("b");
+    const c = grid("c");
+    const first = new GridContainer([a, b, c], "first");
+    const workspace = new EditorWorkspace([first]);
+
+    workspace.history.execute("Remove middle", () => first.removeGrid(b.id));
+
+    expect(first.getGrids()).toEqual([a, c]);
+    workspace.history.undo();
+    expect(first.getGrids()).toEqual([a, b, c]);
+
+    workspace.history.redo();
+    expect(first.getGrids()).toEqual([a, c]);
+    expect(b.container).toBeNull();
+  });
+
+  it("restores grid subscriptions after undoing a removal", () => {
+    const { first, workspace } = setup();
+    const piano = grid("piano");
+    const note = new MidiNote(0, 0, 120, "note");
+    piano.addElement(note);
+    first.addGrid(piano);
+
+    workspace.history.execute("Remove", () => first.removeGrid(piano.id));
+    const listener = vi.fn();
+    workspace.onChange(listener);
+
+    workspace.history.undo();
+    listener.mockClear();
+    note.moveToTick(240);
+
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
+      type: "container-changed",
+      containerId: "first",
+      change: {
+        type: "grid-changed",
+        gridId: "piano",
+        change: {
+          type: "element-updated",
+          elementId: "note",
+          properties: ["startTick"],
+        },
+      },
+    }]);
+  });
+
+  it("undoes and redoes grid reordering without replacing any grid", () => {
+    const a = grid("a");
+    const b = grid("b");
+    const c = grid("c");
+    const first = new GridContainer([a, b, c]);
+    const workspace = new EditorWorkspace([first]);
+
+    workspace.history.execute("Reorder", () => first.reorderGrid(a, 2));
+
+    expect(first.getGrids()).toEqual([b, c, a]);
+    workspace.history.undo();
+    expect(first.getGrids()).toEqual([a, b, c]);
+    expect(a.container).toBe(first);
+
+    workspace.history.redo();
+    expect(first.getGrids()).toEqual([b, c, a]);
+  });
+
+  it("treats a transfer within the same container as an undoable reorder", () => {
+    const a = grid("a");
+    const b = grid("b");
+    const first = new GridContainer([a, b]);
+    const workspace = new EditorWorkspace([first]);
+
+    workspace.history.execute("Reorder", () => {
+      first.transferGridTo(a, first, 1);
+    });
+
+    expect(first.getGrids()).toEqual([b, a]);
+    workspace.history.undo();
+    expect(first.getGrids()).toEqual([a, b]);
+    workspace.history.redo();
+    expect(first.getGrids()).toEqual([b, a]);
+  });
+
+  it("undoes a transfer across owned containers and restores both positions", () => {
+    const { first, second, workspace } = setup();
+    const a = grid("a");
+    const b = grid("b");
+    const c = grid("c");
+    const d = grid("d");
+    first.addGrid(a);
+    first.addGrid(b);
+    second.addGrid(c);
+    second.addGrid(d);
+
+    workspace.history.execute("Transfer", () => {
+      workspace.moveGrid(b, second, 1);
+    });
+
+    expect(first.getGrids()).toEqual([a]);
+    expect(second.getGrids()).toEqual([c, b, d]);
+    expect(b.container).toBe(second);
+
+    workspace.history.undo();
+    expect(first.getGrids()).toEqual([a, b]);
+    expect(second.getGrids()).toEqual([c, d]);
+    expect(b.container).toBe(first);
+
+    workspace.history.redo();
+    expect(first.getGrids()).toEqual([a]);
+    expect(second.getGrids()).toEqual([c, b, d]);
+    expect(b.container).toBe(second);
+  });
+
+  it("keeps locked notes intact when transferring their grid and undoing", () => {
+    const { first, second, workspace } = setup();
+    const piano = grid("piano");
+    const note = new MidiNote(0, 0, 120, "locked");
+    piano.addElement(note);
+    note.locked = true;
+    first.addGrid(piano);
+
+    workspace.history.execute("Transfer", () => workspace.moveGrid(piano, second));
+
+    expect(piano.container).toBe(second);
+    expect(note.locked).toBe(true);
+    workspace.history.undo();
+    expect(piano.container).toBe(first);
+    expect(note.grid).toBe(piano);
+    expect(note.locked).toBe(true);
+  });
+
+  it("rolls back adding a grid and a note when a later edit fails", () => {
+    const { first, workspace } = setup();
+    const piano = grid("piano");
+    const note = new MidiNote(0, 0, 120, "note");
+
+    expect(() => workspace.history.execute("Invalid create", () => {
+      first.addGrid(piano);
+      piano.addElement(note);
+      note.moveToTick(240);
+      note.resizeToDuration(-1);
+    })).toThrow("Invalid element timing");
+
+    expect(first.getGrids()).toEqual([]);
+    expect(piano.container).toBeNull();
+    expect(piano.getElements()).toEqual([]);
+    expect(note.grid).toBeNull();
+    expect(note.startTick).toBe(0);
+    expect(workspace.history.canUndo).toBe(false);
+  });
+
+  it("restores a removed grid before reversing previous changes to its notes", () => {
+    const { first, workspace } = setup();
+    const piano = grid("piano");
+    const note = new MidiNote(0, 0, 120, "note");
+    piano.addElement(note);
+    first.addGrid(piano);
+
+    workspace.history.execute("Edit then remove", () => {
+      note.moveToTick(480);
+      first.removeGrid(piano.id);
+    });
+
+    expect(first.getGrid(piano.id)).toBeUndefined();
+    workspace.history.undo();
+    expect(first.getGrid(piano.id)).toBe(piano);
+    expect(note.startTick).toBe(0);
+
+    workspace.history.redo();
+    expect(first.getGrid(piano.id)).toBeUndefined();
+    expect(note.startTick).toBe(480);
+  });
+
+  it("groups reorders and transfers in a single undo entry", () => {
+    const { first, second, workspace } = setup();
+    const a = grid("a");
+    const b = grid("b");
+    const c = grid("c");
+    first.addGrid(a);
+    first.addGrid(b);
+    second.addGrid(c);
+
+    workspace.history.execute("Organize", () => {
+      first.reorderGrid(a, 1);
+      workspace.moveGrid(b, second, 0);
+    });
+
+    expect(first.getGrids()).toEqual([a]);
+    expect(second.getGrids()).toEqual([b, c]);
+    workspace.history.undo();
+    expect(first.getGrids()).toEqual([a, b]);
+    expect(second.getGrids()).toEqual([c]);
+    expect(workspace.history.canUndo).toBe(false);
+
+    workspace.history.redo();
+    expect(first.getGrids()).toEqual([a]);
+    expect(second.getGrids()).toEqual([b, c]);
+  });
+
+  it("rolls back in-scope grid changes when a later operation targets another workspace", () => {
+    const left = setup();
+    const right = setup();
+    const piano = grid("piano");
+    const outside = grid("outside");
+
+    expect(() => left.workspace.history.execute("Cross-workspace", () => {
+      left.first.addGrid(piano);
+      right.first.addGrid(outside);
+    })).toThrow(/outside the recording scope/);
+
+    expect(left.first.getGrids()).toEqual([]);
+    expect(right.first.getGrids()).toEqual([]);
+    expect(piano.container).toBeNull();
+    expect(outside.container).toBeNull();
+    expect(left.workspace.history.canUndo).toBe(false);
+  });
+
+  it("rejects deletion of a locked grid without recording a history entry", () => {
+    const { first, workspace } = setup();
+    const piano = grid("piano");
+    const note = new MidiNote(0, 0, 120, "locked");
+    piano.addElement(note);
+    note.locked = true;
+    first.addGrid(piano);
+
+    expect(() => workspace.history.execute("Remove", () => {
+      first.removeGrid(piano.id);
+    })).toThrow(/locked/);
+
+    expect(first.getGrid(piano.id)).toBe(piano);
+    expect(workspace.history.canUndo).toBe(false);
+  });
+
+  it("does not create history for a no-op reorder or missing removal", () => {
+    const { first, workspace } = setup();
+    const piano = grid("piano");
+    first.addGrid(piano);
+
+    workspace.history.execute("No change", () => {
+      first.reorderGrid(piano, 0);
+      first.removeGrid("missing");
+    });
+
+    expect(workspace.history.canUndo).toBe(false);
+    expect(first.getGrids()).toEqual([piano]);
+  });
+
+  it("refuses stale undo after an independent reorder returned to the same order", () => {
+    const a = grid("a");
+    const b = grid("b");
+    const c = grid("c");
+    const first = new GridContainer([a, b, c], "first");
+    const workspace = new EditorWorkspace([first]);
+
+    workspace.history.execute("Reorder", () => first.reorderGrid(a, 2));
+    first.reorderGrid(a, 0);
+    first.reorderGrid(a, 2);
+
+    expect(() => workspace.history.undo()).toThrow(
+      /modified outside this mutation/,
+    );
+    expect(first.getGrids()).toEqual([b, c, a]);
+    expect(workspace.history.canUndo).toBe(true);
+  });
+
+  it("blocks container membership operations inside history but allows them outside", () => {
+    const { workspace } = setup();
+    const added = new GridContainer([], "added");
+
+    expect(() => workspace.history.execute("Add container", () => {
+      workspace.addContainer(added);
+    })).toThrow(/not undoable yet/);
+    expect(added.workspace).toBeNull();
+    expect(workspace.getContainer(added.id)).toBeUndefined();
+
+    workspace.addContainer(added);
+    expect(added.workspace).toBe(workspace);
+
+    expect(() => workspace.history.execute("Remove container", () => {
+      workspace.removeContainer(added.id);
+    })).toThrow(/not undoable yet/);
+    expect(added.workspace).toBe(workspace);
+
+    expect(workspace.removeContainer(added.id)).toBe(true);
+    expect(added.workspace).toBeNull();
+  });
+});
