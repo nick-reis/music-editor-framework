@@ -1,6 +1,11 @@
 import { ChangeBatchEmitter } from "../events/ChangeBatchEmitter";
 import { MutationCapture } from "../mutations/MutationCapture";
-import { attachGridToContainer, detachGridFromContainer, getContainerWorkspace, reparentGridToContainer } from "../internal/ModelOwnership";
+import {
+  attachGridToContainer,
+  detachGridFromContainer,
+  getContainerWorkspace,
+  reparentGridToContainer,
+} from "../internal/ModelOwnership";
 
 import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
 import type { GridChange, GridContainerChange } from "../events/ModelChange";
@@ -95,21 +100,19 @@ export class GridContainer {
 
     const after = this.updateStructure();
 
-    if (MutationCapture.isRecording(this)) {
-      MutationCapture.record({
-        target: this,
-        before,
-        after,
-        undo: () =>
-          this.replayStructure(after, before, () =>
-            this.reorderGrid(grid, fromIndex),
-          ),
-        redo: () =>
-          this.replayStructure(before, after, () =>
-            this.reorderGrid(grid, index),
-          ),
-      });
-    }
+    MutationCapture.record({
+      target: this,
+      before,
+      after,
+      undo: () =>
+        this.replayStructure(after, before, () =>
+          this.reorderGrid(grid, fromIndex),
+        ),
+      redo: () =>
+        this.replayStructure(before, after, () =>
+          this.reorderGrid(grid, index),
+        ),
+    });
 
     this.changes.emit({
       type: "grid-reordered",
@@ -177,35 +180,39 @@ export class GridContainer {
       const sourceAfter = this.updateStructure();
       const targetAfter = target.updateStructure();
 
-      if (MutationCapture.isRecording(this)) {
-        MutationCapture.record({
-          target: this,
-          before: Object.freeze({ source: sourceBefore, target: targetBefore }),
-          after: Object.freeze({ source: sourceAfter, target: targetAfter }),
-          undo: () =>
-            GridContainer.replayTransfer(
-              target,
-              this,
-              grid,
-              sourceIndex,
-              targetAfter,
-              sourceAfter,
-              targetBefore,
-              sourceBefore,
-            ),
-          redo: () =>
-            GridContainer.replayTransfer(
-              this,
-              target,
-              grid,
-              insertAt,
-              sourceBefore,
-              targetBefore,
-              sourceAfter,
-              targetAfter,
-            ),
-        });
-      }
+      MutationCapture.record({
+        target: this,
+        before: Object.freeze({
+          source: sourceBefore,
+          target: targetBefore,
+        }),
+        after: Object.freeze({
+          source: sourceAfter,
+          target: targetAfter,
+        }),
+        undo: () =>
+          GridContainer.replayTransfer(
+            target,
+            this,
+            grid,
+            sourceIndex,
+            targetAfter,
+            sourceAfter,
+            targetBefore,
+            sourceBefore,
+          ),
+        redo: () =>
+          GridContainer.replayTransfer(
+            this,
+            target,
+            grid,
+            insertAt,
+            sourceBefore,
+            targetBefore,
+            sourceAfter,
+            targetAfter,
+          ),
+      });
 
       this.changes.emit({ type: "grid-removed", gridId: grid.id });
       target.changes.emit({ type: "grid-added", gridId: grid.id });
@@ -264,7 +271,7 @@ export class GridContainer {
 
     const after = this.updateStructure();
 
-    if (track && MutationCapture.isRecording(this)) {
+    if (track) {
       MutationCapture.record({
         target: this,
         before,
@@ -302,19 +309,17 @@ export class GridContainer {
 
     const after = this.updateStructure();
 
-    if (MutationCapture.isRecording(this)) {
-      MutationCapture.record({
-        target: this,
-        before,
-        after,
-        undo: () =>
-          this.replayStructure(after, before, () =>
-            this.insertGrid(grid, index),
-          ),
-        redo: () =>
-          this.replayStructure(before, after, () => this.removeExactGrid(grid)),
-      });
-    }
+    MutationCapture.record({
+      target: this,
+      before,
+      after,
+      undo: () =>
+        this.replayStructure(after, before, () =>
+          this.insertGrid(grid, index),
+        ),
+      redo: () =>
+        this.replayStructure(before, after, () => this.removeExactGrid(grid)),
+    });
 
     this.changes.emit({ type: "grid-removed", gridId: grid.id });
   }

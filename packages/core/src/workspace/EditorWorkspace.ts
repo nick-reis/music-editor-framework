@@ -127,6 +127,8 @@ export class EditorWorkspace {
     this.containers.set(container.id, container);
     this.containerSubscriptions.set(container.id, unsubscribe);
 
+    this.history.invalidateOnDirectEdit();
+
     this.changes.emit({
       type: "container-added",
       containerId: container.id,
@@ -157,6 +159,8 @@ export class EditorWorkspace {
     this.containerSubscriptions.get(id)?.();
     this.containerSubscriptions.delete(id);
     this.containers.delete(id);
+
+    this.history.invalidateOnDirectEdit();
 
     this.reconcileSelection();
 

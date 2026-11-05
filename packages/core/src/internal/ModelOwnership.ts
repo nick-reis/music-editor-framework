@@ -11,7 +11,10 @@ export function getElementGrid(element: EditableElement): Grid | null {
   return gridsByElement.get(element) ?? null;
 }
 
-export function attachElementToGrid(element: EditableElement, grid: Grid): void {
+export function attachElementToGrid(
+  element: EditableElement,
+  grid: Grid,
+): void {
   if (getElementGrid(element) !== null) {
     throw new Error(`Element ${element.id} already belongs to a grid`);
   }
@@ -23,7 +26,10 @@ export function attachElementToGrid(element: EditableElement, grid: Grid): void 
   gridsByElement.set(element, grid);
 }
 
-export function detachElementFromGrid(element: EditableElement, grid: Grid): void {
+export function detachElementFromGrid(
+  element: EditableElement,
+  grid: Grid,
+): void {
   if (getElementGrid(element) !== grid) {
     throw new Error(`Element ${element.id} does not belong to this grid`);
   }
@@ -39,7 +45,10 @@ export function getGridContainer(grid: Grid): GridContainer | null {
   return containersByGrid.get(grid) ?? null;
 }
 
-export function attachGridToContainer(grid: Grid, container: GridContainer): void {
+export function attachGridToContainer(
+  grid: Grid,
+  container: GridContainer,
+): void {
   if (getGridContainer(grid) !== null) {
     throw new Error(`Grid ${grid.id} already belongs to a container`);
   }
@@ -47,7 +56,10 @@ export function attachGridToContainer(grid: Grid, container: GridContainer): voi
   containersByGrid.set(grid, container);
 }
 
-export function detachGridFromContainer(grid: Grid, container: GridContainer): void {
+export function detachGridFromContainer(
+  grid: Grid,
+  container: GridContainer,
+): void {
   if (getGridContainer(grid) !== container) {
     throw new Error(`Grid ${grid.id} does not belong to this container`);
   }
@@ -65,13 +77,17 @@ export function reparentGridToContainer(
   }
 
   if (source.workspace !== target.workspace) {
-    throw new Error("Grid transfers require the same workspace or detached containers");
+    throw new Error(
+      "Grid transfers require the same workspace or detached containers",
+    );
   }
 
   containersByGrid.set(grid, target);
 }
 
-export function getContainerWorkspace(container: GridContainer): EditorWorkspace | null {
+export function getContainerWorkspace(
+  container: GridContainer,
+): EditorWorkspace | null {
   return workspacesByContainer.get(container) ?? null;
 }
 
@@ -80,7 +96,9 @@ export function attachContainerToWorkspace(
   workspace: EditorWorkspace,
 ): void {
   if (getContainerWorkspace(container) !== null) {
-    throw new Error(`GridContainer ${container.id} already belongs to a workspace`);
+    throw new Error(
+      `GridContainer ${container.id} already belongs to a workspace`,
+    );
   }
 
   workspacesByContainer.set(container, workspace);
@@ -91,8 +109,23 @@ export function detachContainerFromWorkspace(
   workspace: EditorWorkspace,
 ): void {
   if (getContainerWorkspace(container) !== workspace) {
-    throw new Error(`GridContainer ${container.id} does not belong to this workspace`);
+    throw new Error(
+      `GridContainer ${container.id} does not belong to this workspace`,
+    );
   }
 
   workspacesByContainer.delete(container);
+}
+
+export function getOwningWorkspace(target: object): EditorWorkspace | null {
+  const workspace = workspacesByContainer.get(target as GridContainer);
+  if (workspace) return workspace;
+
+  const container = containersByGrid.get(target as Grid);
+  if (container) return getContainerWorkspace(container);
+
+  const grid = gridsByElement.get(target as EditableElement);
+  if (grid) return getOwningWorkspace(grid);
+
+  return null;
 }

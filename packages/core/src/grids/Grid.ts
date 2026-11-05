@@ -1,6 +1,10 @@
 import { ChangeBatchEmitter } from "../events/ChangeBatchEmitter";
 import { MutationCapture } from "../mutations/MutationCapture";
-import { attachElementToGrid, detachElementFromGrid, getGridContainer } from "../internal/ModelOwnership";
+import {
+  attachElementToGrid,
+  detachElementFromGrid,
+  getGridContainer,
+} from "../internal/ModelOwnership";
 
 import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
 import type { GridChange } from "../events/ModelChange";
@@ -138,15 +142,13 @@ export abstract class Grid<
     const after = restored ?? Object.freeze({ present: true });
     this.membershipStates.set(element, after);
 
-    if (MutationCapture.isRecording(this)) {
-      MutationCapture.record({
-        target: this,
-        before,
-        after,
-        undo: () => this.removeExactElement(element, after, before),
-        redo: () => this.insertElement(element, index, before, after),
-      });
-    }
+    MutationCapture.record({
+      target: this,
+      before,
+      after,
+      undo: () => this.removeExactElement(element, after, before),
+      redo: () => this.insertElement(element, index, before, after),
+    });
 
     this.changes.emit({
       type: "element-added",
@@ -194,21 +196,17 @@ export abstract class Grid<
     const after = restored ?? Object.freeze({ present: false });
     this.membershipStates.set(element, after);
 
-    if (MutationCapture.isRecording(this)) {
-      MutationCapture.record({
-        target: this,
-        before,
-        after,
-        undo: () => this.insertElement(element, index, after, before),
-        redo: () => this.removeExactElement(element, before, after),
-      });
-    }
+    MutationCapture.record({
+      target: this,
+      before,
+      after,
+      undo: () => this.insertElement(element, index, after, before),
+      redo: () => this.removeExactElement(element, before, after),
+    });
 
     this.changes.emit({
       type: "element-removed",
       elementId: element.id,
     });
   }
-
-
 }

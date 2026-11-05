@@ -27,6 +27,7 @@ export class EditorHistory {
   private readonly changes = new ChangeEmitter<EditorHistoryChange>();
 
   private executing = false;
+  private invalidationPending = false;
 
   constructor(
     private readonly accepts: (target: object) => boolean = () => true,
@@ -132,6 +133,15 @@ export class EditorHistory {
     });
   }
 
+  invalidateOnDirectEdit(): void {
+    if (this.executing) {
+      this.invalidationPending = true;
+      return;
+    }
+
+    this.clear();
+  }
+
   private replay(
     mutations: readonly ReversibleMutation[],
     direction: ReplayDirection,
@@ -147,11 +157,13 @@ export class EditorHistory {
           throw new Error("Mutation target is outside the history scope");
         }
 
-        if (direction === "undo") {
-          mutation.undo();
-        } else {
-          mutation.redo();
-        }
+        MutationCapture.replayChange(() => {
+          if (direction === "undo") {
+            mutation.undo();
+          } else {
+            mutation.redo();
+          }
+        });
 
         applied.push(mutation);
       }
@@ -160,11 +172,13 @@ export class EditorHistory {
 
       for (const mutation of applied.reverse()) {
         try {
-          if (direction === "undo") {
-            mutation.redo();
-          } else {
-            mutation.undo();
-          }
+          MutationCapture.replayChange(() => {
+            if (direction === "undo") {
+              mutation.redo();
+            } else {
+              mutation.undo();
+            }
+          });
         } catch (recoveryError) {
           recoveryErrors.push(recoveryError);
         }
@@ -182,6 +196,8 @@ export class EditorHistory {
   }
 
   private notifyChange(): void {
+    if (this.invalidationPending) return;
+
     this.changes.emit({
       canUndo: this.canUndo,
       canRedo: this.canRedo,
@@ -201,6 +217,11 @@ export class EditorHistory {
       return operation();
     } finally {
       this.executing = false;
+
+      if (this.invalidationPending) {
+        this.invalidationPending = false;
+        this.clear();
+      }
     }
   }
 }

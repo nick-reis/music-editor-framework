@@ -789,7 +789,7 @@ describe("GridContainer history integration", () => {
     expect(first.getGrids()).toEqual([piano]);
   });
 
-  it("refuses stale undo after an independent reorder returned to the same order", () => {
+  it("clears recorded reordering after a direct reorder returns to the same order", () => {
     const a = grid("a");
     const b = grid("b");
     const c = grid("c");
@@ -800,11 +800,9 @@ describe("GridContainer history integration", () => {
     first.reorderGrid(a, 0);
     first.reorderGrid(a, 2);
 
-    expect(() => workspace.history.undo()).toThrow(
-      /modified outside this mutation/,
-    );
+    expect(workspace.history.canUndo).toBe(false);
+    expect(workspace.history.undo()).toBe(false);
     expect(first.getGrids()).toEqual([b, c, a]);
-    expect(workspace.history.canUndo).toBe(true);
   });
 
   it("blocks container membership operations inside history but allows them outside", () => {

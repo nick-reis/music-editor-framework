@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { MidiNote } from "../elements/MidiNote";
 import { GridContainer } from "../grids/GridContainer";
 import { EditorWorkspace } from "./EditorWorkspace";
+import { MutationCapture } from "../mutations/MutationCapture";
 import { AudioClip } from "../elements/AudioClip";
 import { AudioGrid } from "../grids/AudioGrid";
 import { MidiGrid } from "../grids/MidiGrid";
@@ -612,7 +613,7 @@ describe("EditorWorkspace history integration", () => {
     expect([inside.startTick, outside.startTick]).toEqual([240, 480]);
   });
 
-  it("keeps history valid when moving a grid between containers in the same workspace", () => {
+  it("invalidates recorded note history after a direct grid transfer", () => {
     const { first, workspace } = createWorkspace();
     const destination = new GridContainer([], "other");
     workspace.addContainer(destination);
@@ -624,11 +625,12 @@ describe("EditorWorkspace history integration", () => {
 
     expect(note.grid).toBe(first);
     expect(workspace.getGrid(first.id)).toBe(first);
-    expect(workspace.history.undo()).toBe(true);
-    expect(note.startTick).toBe(0);
+    expect(workspace.history.canUndo).toBe(false);
+    expect(workspace.history.undo()).toBe(false);
+    expect(note.startTick).toBe(240);
   });
 
-  it("rejects replay after the edited grid is removed from the workspace", () => {
+  it("invalidates history when a grid is directly removed from its workspace", () => {
     const { first, container, workspace } = createWorkspace();
     const note = new MidiNote(0, 0, 120, "note");
     first.addElement(note);
@@ -636,12 +638,13 @@ describe("EditorWorkspace history integration", () => {
     workspace.history.execute("Move", () => note.moveToTick(240));
     container.removeGrid(first.id);
 
-    expect(() => workspace.history.undo()).toThrow(/outside the history scope/);
+    expect(workspace.history.canUndo).toBe(false);
+    expect(workspace.history.undo()).toBe(false);
     expect(note.startTick).toBe(240);
-    expect(workspace.history.canUndo).toBe(true);
+    expect(first.container).toBeNull();
   });
 
-  it("accepts newly attached elements but not previously removed elements", () => {
+  it("invalidates old history when an element is directly replaced", () => {
     const { first, workspace } = createWorkspace();
     const oldNote = new MidiNote(0, 0, 120, "same");
     const newNote = new MidiNote(0, 0, 120, "same");
@@ -651,7 +654,9 @@ describe("EditorWorkspace history integration", () => {
     first.removeElement(oldNote.id);
     first.addElement(newNote);
 
-    expect(() => workspace.history.undo()).toThrow(/outside the history scope/);
+    expect(workspace.history.canUndo).toBe(false);
+    expect(workspace.history.undo()).toBe(false);
+    expect(first.getElement("same")).toBe(newNote);
     expect(newNote.startTick).toBe(0);
     expect(oldNote.startTick).toBe(240);
   });
@@ -868,7 +873,7 @@ describe("EditorWorkspace history integration", () => {
     }]);
   });
 
-  it("rejects undo after independent membership edits even when the element remains absent", () => {
+  it("clears stale deletion history even if direct edits return to the same membership", () => {
     const { first, workspace } = createWorkspace();
     const note = new MidiNote(0, 0, 120, "note");
     first.addElement(note);
@@ -877,14 +882,12 @@ describe("EditorWorkspace history integration", () => {
     first.addElement(note);
     first.removeElement(note.id);
 
-    expect(() => workspace.history.undo()).toThrow(
-      /membership was modified outside this mutation/,
-    );
+    expect(workspace.history.canUndo).toBe(false);
+    expect(workspace.history.undo()).toBe(false);
     expect(first.getElement(note.id)).toBeUndefined();
-    expect(workspace.history.canUndo).toBe(true);
   });
 
-  it("recovers a replayed structural change when a later property undo conflicts", () => {
+  it("clears multi-mutation history when a later direct property edit occurs", () => {
     const { first, workspace } = createWorkspace();
     const edited = new MidiNote(0, 0, 120, "edited");
     const removed = new MidiNote(0, 0, 120, "removed");
@@ -898,13 +901,11 @@ describe("EditorWorkspace history integration", () => {
 
     edited.moveToTick(720);
 
-    expect(() => workspace.history.undo()).toThrow(
-      /modified outside this mutation/,
-    );
+    expect(workspace.history.canUndo).toBe(false);
+    expect(workspace.history.undo()).toBe(false);
     expect(edited.startTick).toBe(720);
     expect(first.getElement(removed.id)).toBeUndefined();
     expect(removed.grid).toBeNull();
-    expect(workspace.history.canUndo).toBe(true);
   });
 
   it("rolls back a lock change when it makes a later removal illegal", () => {
@@ -1193,5 +1194,249 @@ describe("EditorWorkspace ownership encapsulation", () => {
     expect(first.getContainer(container.id)).toBe(container);
     expect(second.getContainers()).toEqual([]);
     expect(listener).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("EditorWorkspace direct-edit history invalidation", () => {
+  const rows = [{ id: "c4", label: "C4", pitch: 60 }];
+
+  function setup(id = "workspace") {
+    const grid = new MidiGrid(rows, "piano");
+    const container = new GridContainer([grid], "tracks");
+    const workspace = new EditorWorkspace([container], id);
+    const note = new MidiNote(0, 0, 120, "note");
+    grid.addElement(note);
+    return { workspace, container, grid, note };
+  }
+
+  it("clears undo history immediately when a note is directly edited", () => {
+    const { workspace, note } = setup();
+    const events = vi.fn();
+    workspace.history.onChange(events);
+    workspace.history.execute("Recorded move", () => note.moveToTick(240));
+
+    note.moveToTick(480);
+
+    expect(note.startTick).toBe(480);
+    expect(workspace.history.canUndo).toBe(false);
+    expect(workspace.history.canRedo).toBe(false);
+    expect(workspace.history.undoLabel).toBeNull();
+    expect(workspace.history.undo()).toBe(false);
+    expect(events).toHaveBeenLastCalledWith({
+      canUndo: false,
+      canRedo: false,
+      undoLabel: null,
+      redoLabel: null,
+    });
+  });
+
+  it("clears the redo stack after a direct edit following undo", () => {
+    const { workspace, note } = setup();
+    workspace.history.execute("Move", () => note.moveToTick(240));
+    expect(workspace.history.undo()).toBe(true);
+    expect(workspace.history.canRedo).toBe(true);
+
+    note.moveToTick(480);
+
+    expect(workspace.history.canRedo).toBe(false);
+    expect(workspace.history.redo()).toBe(false);
+    expect(note.startTick).toBe(480);
+  });
+
+  it("preserves undo history for no-ops and rejected model edits", () => {
+    const { workspace, note, grid } = setup();
+    workspace.history.execute("Move", () => note.moveToTick(240));
+
+    note.moveToTick(240);
+    note.row = 0;
+    expect(grid.removeElement("missing")).toBe(false);
+    expect(() => note.resizeToDuration(-1)).toThrow(/Invalid element timing/);
+    expect(() => grid.addElement(new MidiNote(5, 0, 120))).toThrow(/outside grid bounds/);
+
+    expect(workspace.history.canUndo).toBe(true);
+    expect(workspace.history.undoLabel).toBe("Move");
+    expect(workspace.history.undo()).toBe(true);
+    expect(note.startTick).toBe(0);
+  });
+
+  it("treats a successful direct lock change as a history boundary", () => {
+    const { workspace, note } = setup();
+    workspace.history.execute("Move", () => note.moveToTick(240));
+
+    note.setLocked(true);
+
+    expect(workspace.history.canUndo).toBe(false);
+    expect(() => note.moveToTick(480)).toThrow(/locked/);
+    expect(note.locked).toBe(true);
+    expect(note.startTick).toBe(240);
+  });
+
+  it("invalidates history after direct element insertion and deletion", () => {
+    const { workspace, grid, note } = setup();
+    workspace.history.execute("Move", () => note.moveToTick(240));
+    const extra = new MidiNote(0, 0, 120, "extra");
+
+    grid.addElement(extra);
+    expect(workspace.history.canUndo).toBe(false);
+
+    workspace.history.execute("Another move", () => note.moveToTick(360));
+    expect(workspace.history.canUndo).toBe(true);
+    grid.removeElement(extra.id);
+
+    expect(extra.grid).toBeNull();
+    expect(workspace.history.canUndo).toBe(false);
+  });
+
+  it("invalidates history on structural changes to attached grids", () => {
+    const { workspace, container, note } = setup();
+    const second = new MidiGrid(rows, "second");
+    workspace.history.execute("Move", () => note.moveToTick(240));
+
+    container.addGrid(second);
+    expect(workspace.history.canUndo).toBe(false);
+
+    workspace.history.execute("Move again", () => note.moveToTick(360));
+    container.reorderGrid(second, 0);
+    expect(workspace.history.canUndo).toBe(false);
+
+    workspace.history.execute("Move a third time", () => note.moveToTick(480));
+    container.removeGrid(second.id);
+    expect(workspace.history.canUndo).toBe(false);
+  });
+
+  it("invalidates history for direct workspace container changes", () => {
+    const { workspace, note } = setup();
+    workspace.history.execute("Move", () => note.moveToTick(240));
+    const extra = new GridContainer([], "extra");
+
+    workspace.addContainer(extra);
+    expect(workspace.history.canUndo).toBe(false);
+
+    workspace.history.execute("Move again", () => note.moveToTick(360));
+    workspace.removeContainer(extra.id);
+    expect(workspace.history.canUndo).toBe(false);
+    expect(extra.workspace).toBeNull();
+  });
+
+  it("does not clear another workspace's existing history", () => {
+    const left = setup("left");
+    const right = setup("right");
+    left.workspace.history.execute("Left move", () => left.note.moveToTick(240));
+    right.workspace.history.execute("Right move", () => right.note.moveToTick(480));
+
+    right.note.moveToTick(960);
+
+    expect(left.workspace.history.canUndo).toBe(true);
+    expect(right.workspace.history.canUndo).toBe(false);
+    left.workspace.history.undo();
+    expect(left.note.startTick).toBe(0);
+    expect(right.note.startTick).toBe(960);
+  });
+
+  it("invalidates synchronously even within workspace notification batching", () => {
+    const { workspace, note } = setup();
+    workspace.history.execute("Move", () => note.moveToTick(240));
+
+    workspace.batchChanges(() => {
+      note.moveToTick(480);
+      expect(workspace.history.canUndo).toBe(false);
+    });
+  });
+
+  it("preserves recorded history after edits to detached objects", () => {
+    const { workspace, note } = setup();
+    const detached = new MidiNote(0, 0, 120, "detached");
+    workspace.history.execute("Move", () => note.moveToTick(240));
+
+    detached.moveToTick(960);
+
+    expect(workspace.history.canUndo).toBe(true);
+    workspace.history.undo();
+    expect(note.startTick).toBe(0);
+    expect(detached.startTick).toBe(960);
+  });
+
+  it("invalidates history for an attached note changed inside a standalone capture", () => {
+    const { workspace, note } = setup();
+    workspace.history.execute("Move", () => note.moveToTick(240));
+    const capture = new MutationCapture();
+
+    capture.run(() => note.moveToTick(480));
+
+    expect(capture.mutations).toHaveLength(1);
+    expect(workspace.history.canUndo).toBe(false);
+    expect(note.startTick).toBe(480);
+  });
+
+  it("invalidates redo when an observer directly edits during undo", () => {
+    const { workspace, note } = setup();
+    workspace.history.execute("Move", () => note.moveToTick(240));
+    note.onChange(() => {
+      if (note.startTick === 0) note.moveToTick(360);
+    });
+
+    expect(workspace.history.undo()).toBe(true);
+
+    expect(note.startTick).toBe(360);
+    expect(workspace.history.canUndo).toBe(false);
+    expect(workspace.history.canRedo).toBe(false);
+    expect(workspace.history.redo()).toBe(false);
+  });
+
+  it("invalidates history when an observer directly edits during redo", () => {
+    const { workspace, note } = setup();
+    workspace.history.execute("Move", () => note.moveToTick(240));
+    workspace.history.undo();
+    note.onChange(() => {
+      if (note.startTick === 240) note.moveToTick(720);
+    });
+
+    expect(workspace.history.redo()).toBe(true);
+
+    expect(note.startTick).toBe(720);
+    expect(workspace.history.canUndo).toBe(false);
+    expect(workspace.history.canRedo).toBe(false);
+  });
+
+  it("preserves history when undo changes a note without observer mutations", () => {
+    const { workspace, note } = setup();
+    workspace.history.execute("Move", () => note.moveToTick(240));
+
+    expect(workspace.history.undo()).toBe(true);
+    expect(workspace.history.canRedo).toBe(true);
+    expect(workspace.history.redo()).toBe(true);
+
+    expect(note.startTick).toBe(240);
+    expect(workspace.history.canUndo).toBe(true);
+  });
+
+  it("invalidates only the observer-edited document during independent undo", () => {
+    const left = setup("left");
+    const right = setup("right");
+    left.workspace.history.execute("Left move", () => left.note.moveToTick(240));
+    right.workspace.history.execute("Right move", () => right.note.moveToTick(480));
+    left.note.onChange(() => {
+      if (left.note.startTick === 0) right.note.moveToTick(960);
+    });
+
+    left.workspace.history.undo();
+
+    expect(left.workspace.history.canRedo).toBe(true);
+    expect(right.workspace.history.canUndo).toBe(false);
+    expect(right.note.startTick).toBe(960);
+  });
+
+  it("invalidates history when a history-change subscriber makes a direct edit", () => {
+    const { workspace, note } = setup();
+    workspace.history.onChange((change) => {
+      if (change.canUndo) note.moveToTick(720);
+    });
+
+    workspace.history.execute("Move", () => note.moveToTick(240));
+
+    expect(note.startTick).toBe(720);
+    expect(workspace.history.canUndo).toBe(false);
+    expect(workspace.history.undoLabel).toBeNull();
   });
 });

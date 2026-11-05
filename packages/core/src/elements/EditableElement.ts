@@ -174,15 +174,13 @@ export abstract class EditableElement<
 
     this._state = next;
 
-    if (capture && MutationCapture.isRecording(this)) {
-      MutationCapture.record({
-        target: this,
-        before,
-        after: next,
-        undo: () => this.restoreState(next, before),
-        redo: () => this.restoreState(before, next),
-      });
-    }
+    MutationCapture.record({
+      target: this,
+      before,
+      after: next,
+      undo: () => this.restoreState(next, before),
+      redo: () => this.restoreState(before, next),
+    });
 
     this.notifyChange(properties);
   }
@@ -223,6 +221,4 @@ export abstract class EditableElement<
       throw new TypeError("Locked must be a boolean");
     }
   }
-
-
 }
