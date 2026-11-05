@@ -66,7 +66,7 @@ export class MoveElementsCommand implements Command {
     const targets = this.moves.map((move) => move.to);
 
     this.assertPositions(targets);
-    this.validateTargets(this.previousPositions, false);
+    this.validateTargets(this.previousPositions, true);
 
     this.withBatchedChanges(() => {
       this.applyPositions(this.previousPositions!, targets);

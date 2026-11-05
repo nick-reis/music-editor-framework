@@ -82,7 +82,7 @@ describe("MoveElementsCommand edge cases", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
-  it("supports undo while an element is locked after execution", () => {
+  it("rejects undo after an external lock without corrupting command state", () => {
     const g = grid();
     const note = new MidiNote(0, 0, 120, "note");
     g.addElement(note);
@@ -91,9 +91,12 @@ describe("MoveElementsCommand edge cases", () => {
     ]);
 
     command.execute();
-    note.locked = true;
-    command.undo();
+    note.setLocked(true);
+    expect(() => command.undo()).toThrow(/locked/i);
+    expect([note.startTick, note.row]).toEqual([480, 1]);
 
+    note.setLocked(false);
+    command.undo();
     expect([note.startTick, note.row]).toEqual([0, 0]);
   });
 

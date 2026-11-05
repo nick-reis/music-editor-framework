@@ -64,7 +64,6 @@ export abstract class Grid<
       throw new Error(`Element ${element.id} already exists`);
     }
 
-    // Validates ownership and row bounds before insertion.
     element.attachToGrid(this);
 
     this.elements.set(element.id, element);
@@ -90,6 +89,10 @@ export abstract class Grid<
 
     if (!element) {
       return false;
+    }
+
+    if (element.locked) {
+      throw new Error(`Element ${element.id} is locked`);
     }
 
     element.detachFromGrid(this);

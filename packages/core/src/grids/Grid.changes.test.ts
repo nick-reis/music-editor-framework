@@ -45,8 +45,8 @@ describe("Grid change notifications", () => {
 
     note.moveToTick(480);
     note.resizeToDuration(360);
-    note.locked = true;
     note.row = 1;
+    note.setLocked(true);
 
     expect(listener).toHaveBeenNthCalledWith(1, [{
       type: "element-updated",
@@ -63,14 +63,17 @@ describe("Grid change notifications", () => {
     expect(listener).toHaveBeenNthCalledWith(3, [{
       type: "element-updated",
       elementId: "note-1",
-      properties: ["locked"],
+      properties: ["row"],
     }]);
 
     expect(listener).toHaveBeenNthCalledWith(4, [{
       type: "element-updated",
       elementId: "note-1",
-      properties: ["row"],
+      properties: ["locked"],
     }]);
+
+    expect(() => { note.row = 0; }).toThrow(/locked/i);
+    expect(listener).toHaveBeenCalledTimes(4);
   });
 
   it("notifies when an element is removed", () => {

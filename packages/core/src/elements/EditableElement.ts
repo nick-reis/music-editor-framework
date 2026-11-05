@@ -47,6 +47,12 @@ export abstract class EditableElement {
     });
   }
 
+  protected assertEditable(): void {
+    if (this._locked) {
+      throw new Error(`Element ${this.id} is locked`);
+    }
+  }
+
   get row(): RowIndex {
     return this._row;
   }
@@ -60,6 +66,8 @@ export abstract class EditableElement {
 
     if (this._row === value) return;
 
+    this.assertEditable();
+
     this._row = value;
     this.notifyChange(["row"]);
   }
@@ -69,10 +77,18 @@ export abstract class EditableElement {
   }
 
   set locked(value: boolean) {
+    if (typeof value !== "boolean") {
+      throw new TypeError("Locked must be a boolean");
+    }
+
     if (this._locked === value) return;
 
     this._locked = value;
     this.notifyChange(["locked"]);
+  }
+
+  setLocked(value: boolean): void {
+    this.locked = value;
   }
 
   get startTick(): Tick {
@@ -95,6 +111,8 @@ export abstract class EditableElement {
     this.validateTiming(startTick, this._durationTicks);
 
     if (this._startTick === startTick) return;
+
+    this.assertEditable();
 
     this._startTick = startTick;
     this.notifyChange(["startTick"]);
@@ -123,6 +141,8 @@ export abstract class EditableElement {
 
     if (properties.length === 0) return;
 
+    this.assertEditable();
+
     this._startTick = startTick;
     this._durationTicks = durationTicks;
 
@@ -145,7 +165,6 @@ export abstract class EditableElement {
     }
   }
 
-  /** @internal Called by Grid.addElement(). */
   attachToGrid(grid: Grid): void {
     if (this.owningGrid !== null) {
       throw new Error(`Element ${this.id} already belongs to a grid`);
@@ -158,11 +177,12 @@ export abstract class EditableElement {
     this.owningGrid = grid;
   }
 
-  /** @internal Called by Grid.removeElement(). */
   detachFromGrid(grid: Grid): void {
     if (this.owningGrid !== grid) {
       throw new Error(`Element ${this.id} does not belong to this grid`);
     }
+
+    this.assertEditable();
 
     this.owningGrid = null;
   }

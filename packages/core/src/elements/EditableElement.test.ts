@@ -39,14 +39,20 @@ describe("EditableElement behavior through MidiNote", () => {
     );
   });
 
-  it("preserves existing locking behavior", () => {
+  it("requires an explicit unlock before changing position or duration", () => {
     const note = new MidiNote(0, 120, 240, "note-1");
     note.locked = true;
 
+    expect(() => note.moveToTick(480)).toThrow(/locked/i);
+    expect(() => note.resizeToDuration(360)).toThrow(/locked/i);
+    expect(note.startTick).toBe(120);
+    expect(note.durationTicks).toBe(240);
+
+    note.setLocked(false);
     note.moveToTick(480);
     note.resizeToDuration(360);
 
-    expect(note.locked).toBe(true);
+    expect(note.locked).toBe(false);
     expect(note.startTick).toBe(480);
     expect(note.durationTicks).toBe(360);
   });
