@@ -1,4 +1,5 @@
 import { ChangeBatchEmitter } from "../events/ChangeBatchEmitter";
+import { MutationCapture } from "../mutations/MutationCapture";
 
 import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
 import type { GridChange } from "../events/ModelChange";
@@ -7,6 +8,8 @@ import type { ToolId } from "../tools/ToolId";
 import type { EditableElement } from "../elements/EditableElement";
 import type { GridRow } from "./rows/GridRow";
 import type { GridContainer } from "./GridContainer";
+
+type MembershipState = Readonly<{ present: boolean }>;
 
 export abstract class Grid<
   TElement extends EditableElement = EditableElement,
@@ -19,6 +22,7 @@ export abstract class Grid<
 
   private readonly changes = new ChangeBatchEmitter<GridChange>();
   private readonly elementSubscriptions = new Map<ElementId, Unsubscribe>();
+  private readonly membershipStates = new WeakMap<TElement, MembershipState>();
   private _container: GridContainer | null = null;
 
   protected constructor(
@@ -63,13 +67,63 @@ export abstract class Grid<
   }
 
   addElement(element: TElement): void {
+    this.insertElement(element, this.elements.size);
+  }
+
+  removeElement(id: ElementId): boolean {
+    const element = this.elements.get(id);
+
+    if (!element) {
+      return false;
+    }
+
+    this.removeExactElement(element);
+    return true;
+  }
+
+  getElement(id: ElementId): TElement | undefined {
+    return this.elements.get(id);
+  }
+
+  getElements(): readonly TElement[] {
+    return [...this.elements.values()];
+  }
+
+  private insertElement(
+    element: TElement,
+    index: number,
+    expected?: MembershipState,
+    restored?: MembershipState,
+  ): void {
     if (this.elements.has(element.id)) {
       throw new Error(`Element ${element.id} already exists`);
     }
 
+    if (!Number.isInteger(index) || index < 0 || index > this.elements.size) {
+      throw new RangeError("Invalid element insertion index");
+    }
+
+    const before =
+      this.membershipStates.get(element) ?? Object.freeze({ present: false });
+
+    if (expected && before !== expected) {
+      throw new Error(
+        `Element ${element.id} membership was modified outside this mutation`,
+      );
+    }
+
+    MutationCapture.assertTarget(this);
+
     element.attachToGrid(this);
 
-    this.elements.set(element.id, element);
+    const ordered = [...this.elements.values()];
+    ordered.splice(index, 0, element);
+
+    this.elements.clear();
+
+    for (const item of ordered) {
+      this.elements.set(item.id, item);
+    }
 
     const unsubscribe = element.onChange((change) => {
       this.changes.emit({
@@ -81,43 +135,79 @@ export abstract class Grid<
 
     this.elementSubscriptions.set(element.id, unsubscribe);
 
+    const after = restored ?? Object.freeze({ present: true });
+    this.membershipStates.set(element, after);
+
+    if (MutationCapture.recording) {
+      MutationCapture.record({
+        target: this,
+        before,
+        after,
+        undo: () => this.removeExactElement(element, after, before),
+        redo: () => this.insertElement(element, index, before, after),
+      });
+    }
+
     this.changes.emit({
       type: "element-added",
       elementId: element.id,
     });
   }
 
-  removeElement(id: ElementId): boolean {
-    const element = this.elements.get(id);
-
-    if (!element) {
-      return false;
+  private removeExactElement(
+    element: TElement,
+    expected?: MembershipState,
+    restored?: MembershipState,
+  ): void {
+    if (this.elements.get(element.id) !== element) {
+      throw new Error(
+        `Element ${element.id} is no longer the same grid member`,
+      );
     }
 
     if (element.locked) {
       throw new Error(`Element ${element.id} is locked`);
     }
 
+    const before = this.membershipStates.get(element);
+
+    if (!before || !before.present) {
+      throw new Error(`Invalid element ${element.id} membership state`);
+    }
+
+    if (expected && before !== expected) {
+      throw new Error(
+        `Element ${element.id} membership was modified outside this mutation`,
+      );
+    }
+
+    MutationCapture.assertTarget(this);
+
+    const index = [...this.elements.keys()].indexOf(element.id);
+
     element.detachFromGrid(this);
 
-    this.elementSubscriptions.get(id)?.();
-    this.elementSubscriptions.delete(id);
-    this.elements.delete(id);
+    this.elementSubscriptions.get(element.id)?.();
+    this.elementSubscriptions.delete(element.id);
+    this.elements.delete(element.id);
+
+    const after = restored ?? Object.freeze({ present: false });
+    this.membershipStates.set(element, after);
+
+    if (MutationCapture.recording) {
+      MutationCapture.record({
+        target: this,
+        before,
+        after,
+        undo: () => this.insertElement(element, index, after, before),
+        redo: () => this.removeExactElement(element, before, after),
+      });
+    }
 
     this.changes.emit({
       type: "element-removed",
-      elementId: id,
+      elementId: element.id,
     });
-
-    return true;
-  }
-
-  getElement(id: ElementId): TElement | undefined {
-    return this.elements.get(id);
-  }
-
-  getElements(): readonly TElement[] {
-    return [...this.elements.values()];
   }
 
   _attachToContainer(container: GridContainer): void {

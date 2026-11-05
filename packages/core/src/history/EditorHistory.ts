@@ -135,16 +135,14 @@ export class EditorHistory {
     const ordered =
       direction === "undo" ? [...mutations].reverse() : [...mutations];
 
-    for (const mutation of ordered) {
-      if (!this.accepts(mutation.target)) {
-        throw new Error("Mutation target is outside the history scope");
-      }
-    }
-
     const applied: ReversibleMutation[] = [];
 
     try {
       for (const mutation of ordered) {
+        if (!this.accepts(mutation.target)) {
+          throw new Error("Mutation target is outside the history scope");
+        }
+
         if (direction === "undo") {
           mutation.undo();
         } else {

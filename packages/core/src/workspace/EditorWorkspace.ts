@@ -3,7 +3,7 @@ import { ChangeBatchEmitter } from "../events/ChangeBatchEmitter";
 import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
 import type { WorkspaceChange } from "../events/ModelChange";
 import type { WorkspaceId, GridContainerId, GridId } from "../types/ids";
-import type { Grid } from "../grids/Grid";
+import { Grid } from "../grids/Grid";
 
 import { GridContainer } from "../grids/GridContainer";
 import { SelectionManager } from "../managers/SelectionManager";
@@ -16,7 +16,7 @@ export class EditorWorkspace {
   public readonly selection = new SelectionManager();
 
   public readonly history = new EditorHistory((target) =>
-    this.ownsElement(target),
+    this.ownsTarget(target),
   );
 
   private readonly containers = new Map<GridContainerId, GridContainer>();
@@ -206,7 +206,11 @@ export class EditorWorkspace {
     );
   }
 
-  private ownsElement(target: object): boolean {
+  private ownsTarget(target: object): boolean {
+    if (target instanceof Grid) {
+      return this.getGrid(target.id) === target;
+    }
+
     if (!(target instanceof EditableElement)) {
       return false;
     }

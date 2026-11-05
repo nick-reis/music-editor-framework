@@ -10,6 +10,7 @@ import { MoveElementsCommand } from "../commands/MoveElementsCommand";
 import { MidiGrid } from "./MidiGrid";
 import { EditorWorkspace } from "../workspace/EditorWorkspace";
 import { GridContainer } from "./GridContainer";
+import { MutationCapture } from "../mutations/MutationCapture";
 
 describe("Grid", () => {
   class TestGrid extends Grid<MidiNote> {
@@ -470,5 +471,178 @@ describe("Grid ownership and scoped identities", () => {
     note.moveToTick(240);
 
     expect(listener).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("Grid structural mutation capture", () => {
+  const rows = [
+    { id: "c4", label: "C4", pitch: 60 },
+    { id: "d4", label: "D4", pitch: 62 },
+  ];
+
+  it("records an addition and replays membership on the exact note object", () => {
+    const grid = new MidiGrid(rows, "piano");
+    const note = new MidiNote(0, 0, 120, "note");
+    const capture = new MutationCapture();
+
+    capture.run(() => grid.addElement(note));
+
+    expect(capture.mutations).toHaveLength(1);
+    expect(capture.mutations[0].target).toBe(grid);
+    expect(capture.mutations[0].before).toEqual({ present: false });
+    expect(capture.mutations[0].after).toEqual({ present: true });
+    expect(grid.getElement(note.id)).toBe(note);
+    expect(note.grid).toBe(grid);
+
+    capture.mutations[0].undo();
+    expect(grid.getElement(note.id)).toBeUndefined();
+    expect(note.grid).toBeNull();
+
+    capture.mutations[0].redo();
+    expect(grid.getElement(note.id)).toBe(note);
+    expect(note.grid).toBe(grid);
+  });
+
+  it("restores the original insertion position after undoing a removal", () => {
+    const grid = new MidiGrid(rows);
+    const first = new MidiNote(0, 0, 120, "first");
+    const middle = new MidiNote(0, 120, 120, "middle");
+    const last = new MidiNote(0, 240, 120, "last");
+    grid.addElement(first);
+    grid.addElement(middle);
+    grid.addElement(last);
+
+    const capture = new MutationCapture();
+    capture.run(() => grid.removeElement(middle.id));
+
+    expect(grid.getElements()).toEqual([first, last]);
+    capture.mutations[0].undo();
+    expect(grid.getElements()).toEqual([first, middle, last]);
+    capture.mutations[0].redo();
+    expect(grid.getElements()).toEqual([first, last]);
+  });
+
+  it("restores event subscriptions after undoing a removal", () => {
+    const grid = new MidiGrid(rows);
+    const note = new MidiNote(0, 0, 120, "note");
+    grid.addElement(note);
+    const listener = vi.fn();
+    grid.onChange(listener);
+
+    const capture = new MutationCapture();
+    capture.run(() => grid.removeElement(note.id));
+
+    listener.mockClear();
+    note.moveToTick(240);
+    expect(listener).not.toHaveBeenCalled();
+
+    capture.mutations[0].undo();
+    listener.mockClear();
+    note.moveToTick(480);
+
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
+      type: "element-updated",
+      elementId: note.id,
+      properties: ["startTick"],
+    }]);
+  });
+
+  it("records a move between grids as a remove and add pair", () => {
+    const source = new MidiGrid(rows, "source");
+    const target = new MidiGrid(rows, "target");
+    const note = new MidiNote(0, 0, 120, "note");
+    source.addElement(note);
+    const capture = new MutationCapture();
+
+    capture.run(() => {
+      source.removeElement(note.id);
+      target.addElement(note);
+    });
+
+    expect(capture.mutations).toHaveLength(2);
+    expect(note.grid).toBe(target);
+
+    for (const mutation of [...capture.mutations].reverse()) mutation.undo();
+    expect(note.grid).toBe(source);
+    expect(source.getElement(note.id)).toBe(note);
+    expect(target.getElement(note.id)).toBeUndefined();
+
+    for (const mutation of capture.mutations) mutation.redo();
+    expect(note.grid).toBe(target);
+    expect(target.getElement(note.id)).toBe(note);
+  });
+
+  it("does not record missing removals, duplicate additions, or invalid additions", () => {
+    const grid = new MidiGrid(rows);
+    const existing = new MidiNote(0, 0, 120, "same");
+    grid.addElement(existing);
+    const listener = vi.fn();
+    grid.onChange(listener);
+    const capture = new MutationCapture();
+
+    capture.run(() => {
+      expect(grid.removeElement("missing")).toBe(false);
+      expect(() => grid.addElement(new MidiNote(0, 0, 120, "same"))).toThrow(
+        /already exists/,
+      );
+      expect(() => grid.addElement(new MidiNote(2, 0, 120, "invalid"))).toThrow(
+        /outside grid bounds/,
+      );
+    });
+
+    expect(capture.mutations).toHaveLength(0);
+    expect(grid.getElements()).toEqual([existing]);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("refuses to remove a locked note without capturing a mutation", () => {
+    const grid = new MidiGrid(rows);
+    const note = new MidiNote(0, 0, 120, "locked");
+    grid.addElement(note);
+    note.locked = true;
+    const capture = new MutationCapture();
+    const listener = vi.fn();
+    grid.onChange(listener);
+
+    capture.run(() => {
+      expect(() => grid.removeElement(note.id)).toThrow(/locked/);
+    });
+
+    expect(capture.mutations).toHaveLength(0);
+    expect(note.grid).toBe(grid);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("rejects replay when membership changed independently and returned to the same value", () => {
+    const grid = new MidiGrid(rows);
+    const note = new MidiNote(0, 0, 120, "note");
+    grid.addElement(note);
+    const capture = new MutationCapture();
+
+    capture.run(() => grid.removeElement(note.id));
+    grid.addElement(note);
+    grid.removeElement(note.id);
+
+    expect(() => capture.mutations[0].undo()).toThrow(
+      /membership was modified outside this mutation/,
+    );
+    expect(note.grid).toBeNull();
+    expect(grid.getElements()).toEqual([]);
+  });
+
+  it("does not remove a replacement note that reuses the original ID", () => {
+    const grid = new MidiGrid(rows);
+    const oldNote = new MidiNote(0, 0, 120, "same");
+    const replacement = new MidiNote(0, 240, 120, "same");
+    grid.addElement(oldNote);
+    const capture = new MutationCapture();
+
+    capture.run(() => grid.removeElement(oldNote.id));
+    grid.addElement(replacement);
+
+    expect(() => capture.mutations[0].undo()).toThrow(/already exists/);
+    expect(grid.getElement("same")).toBe(replacement);
+    expect(oldNote.grid).toBeNull();
   });
 });

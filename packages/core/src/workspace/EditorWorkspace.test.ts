@@ -661,4 +661,271 @@ describe("EditorWorkspace history integration", () => {
     expect(workspace.history.undo()).toBe(false);
     expect(note.startTick).toBe(240);
   });
+  it("undoes an element addition followed by a property update", () => {
+    const { first, workspace } = createWorkspace();
+    const note = new MidiNote(0, 0, 120, "new-note");
+
+    workspace.history.execute("Create and move", () => {
+      first.addElement(note);
+      note.moveToTick(480);
+    });
+
+    expect(note.grid).toBe(first);
+    expect(note.startTick).toBe(480);
+    expect(workspace.history.undo()).toBe(true);
+    expect(note.grid).toBeNull();
+    expect(note.startTick).toBe(0);
+    expect(first.getElements()).toEqual([]);
+
+    expect(workspace.history.redo()).toBe(true);
+    expect(note.grid).toBe(first);
+    expect(note.startTick).toBe(480);
+  });
+
+  it("undoes an edit followed by deleting its element", () => {
+    const { first, workspace } = createWorkspace();
+    const note = new MidiNote(0, 0, 120, "note");
+    first.addElement(note);
+
+    workspace.history.execute("Edit and delete", () => {
+      note.moveToTick(960);
+      first.removeElement(note.id);
+    });
+
+    expect(note.grid).toBeNull();
+    workspace.history.undo();
+    expect(note.grid).toBe(first);
+    expect(note.startTick).toBe(0);
+
+    workspace.history.redo();
+    expect(note.grid).toBeNull();
+    expect(note.startTick).toBe(960);
+  });
+
+  it("replaces a note with the same ID and restores the original object on undo", () => {
+    const { first, workspace } = createWorkspace();
+    const before = new MidiNote(0, 0, 120, "same");
+    const after = new MidiNote(0, 120, 120, "same");
+    first.addElement(before);
+
+    workspace.history.execute("Replace", () => {
+      first.removeElement(before.id);
+      first.addElement(after);
+      after.moveToTick(480);
+    });
+
+    expect(first.getElement("same")).toBe(after);
+    workspace.history.undo();
+    expect(first.getElement("same")).toBe(before);
+    expect(before.grid).toBe(first);
+    expect(after.grid).toBeNull();
+    expect(after.startTick).toBe(120);
+
+    workspace.history.redo();
+    expect(first.getElement("same")).toBe(after);
+    expect(after.startTick).toBe(480);
+  });
+
+  it("rolls back additions and edits when a later operation fails validation", () => {
+    const { first, workspace } = createWorkspace();
+    const existing = new MidiNote(0, 0, 120, "existing");
+    const created = new MidiNote(0, 120, 120, "created");
+    first.addElement(existing);
+
+    expect(() => workspace.history.execute("Invalid group", () => {
+      first.addElement(created);
+      created.moveToTick(240);
+      existing.resizeToDuration(-1);
+    })).toThrow("Invalid element timing");
+
+    expect(first.getElements()).toEqual([existing]);
+    expect(created.grid).toBeNull();
+    expect(created.startTick).toBe(120);
+    expect(existing.durationTicks).toBe(120);
+    expect(workspace.history.canUndo).toBe(false);
+  });
+
+  it("rolls back valid additions when a later addition targets another workspace", () => {
+    const left = createWorkspace();
+    const right = createWorkspace();
+    const inside = new MidiNote(0, 0, 120, "inside");
+    const outside = new MidiNote(0, 0, 120, "outside");
+
+    expect(() => left.workspace.history.execute("Cross-workspace", () => {
+      left.first.addElement(inside);
+      right.first.addElement(outside);
+    })).toThrow(/outside the recording scope/);
+
+    expect(inside.grid).toBeNull();
+    expect(outside.grid).toBeNull();
+    expect(left.first.getElements()).toEqual([]);
+    expect(right.first.getElements()).toEqual([]);
+    expect(left.workspace.history.canUndo).toBe(false);
+  });
+
+  it("supports moving a note between two owned grids in a history action", () => {
+    const { first, second, workspace } = createWorkspace();
+    const note = new MidiNote(0, 0, 120, "note");
+    first.addElement(note);
+
+    workspace.history.execute("Move between grids", () => {
+      first.removeElement(note.id);
+      second.addElement(note);
+    });
+
+    expect(note.grid).toBe(second);
+    workspace.history.undo();
+    expect(note.grid).toBe(first);
+    expect(first.getElement(note.id)).toBe(note);
+    expect(second.getElement(note.id)).toBeUndefined();
+
+    workspace.history.redo();
+    expect(note.grid).toBe(second);
+    expect(second.getElement(note.id)).toBe(note);
+  });
+
+  it("groups changes to elements with matching IDs in different owned grids", () => {
+    const { first, second, workspace } = createWorkspace();
+    const left = new MidiNote(0, 0, 120, "same");
+    const right = new MidiNote(0, 0, 120, "same");
+
+    workspace.history.execute("Add both", () => {
+      first.addElement(left);
+      second.addElement(right);
+    });
+
+    expect(first.getElement("same")).toBe(left);
+    expect(second.getElement("same")).toBe(right);
+    workspace.history.undo();
+    expect(first.getElement("same")).toBeUndefined();
+    expect(second.getElement("same")).toBeUndefined();
+    workspace.history.redo();
+    expect(first.getElement("same")).toBe(left);
+    expect(second.getElement("same")).toBe(right);
+  });
+
+  it("forwards undo and redo membership changes and restored note subscriptions", () => {
+    const { first, workspace } = createWorkspace();
+    const note = new MidiNote(0, 0, 120, "note");
+    const listener = vi.fn();
+    workspace.onChange(listener);
+
+    workspace.history.execute("Add", () => first.addElement(note));
+    listener.mockClear();
+
+    workspace.history.undo();
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
+      type: "container-changed",
+      containerId: "tracks",
+      change: {
+        type: "grid-changed",
+        gridId: "piano",
+        change: { type: "element-removed", elementId: "note" },
+      },
+    }]);
+
+    listener.mockClear();
+    workspace.history.redo();
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
+      type: "container-changed",
+      containerId: "tracks",
+      change: {
+        type: "grid-changed",
+        gridId: "piano",
+        change: { type: "element-added", elementId: "note" },
+      },
+    }]);
+
+    listener.mockClear();
+    note.moveToTick(240);
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
+      type: "container-changed",
+      containerId: "tracks",
+      change: {
+        type: "grid-changed",
+        gridId: "piano",
+        change: {
+          type: "element-updated",
+          elementId: "note",
+          properties: ["startTick"],
+        },
+      },
+    }]);
+  });
+
+  it("rejects undo after independent membership edits even when the element remains absent", () => {
+    const { first, workspace } = createWorkspace();
+    const note = new MidiNote(0, 0, 120, "note");
+    first.addElement(note);
+
+    workspace.history.execute("Delete", () => first.removeElement(note.id));
+    first.addElement(note);
+    first.removeElement(note.id);
+
+    expect(() => workspace.history.undo()).toThrow(
+      /membership was modified outside this mutation/,
+    );
+    expect(first.getElement(note.id)).toBeUndefined();
+    expect(workspace.history.canUndo).toBe(true);
+  });
+
+  it("recovers a replayed structural change when a later property undo conflicts", () => {
+    const { first, workspace } = createWorkspace();
+    const edited = new MidiNote(0, 0, 120, "edited");
+    const removed = new MidiNote(0, 0, 120, "removed");
+    first.addElement(edited);
+    first.addElement(removed);
+
+    workspace.history.execute("Edit and remove", () => {
+      edited.moveToTick(240);
+      first.removeElement(removed.id);
+    });
+
+    edited.moveToTick(720);
+
+    expect(() => workspace.history.undo()).toThrow(
+      /modified outside this mutation/,
+    );
+    expect(edited.startTick).toBe(720);
+    expect(first.getElement(removed.id)).toBeUndefined();
+    expect(removed.grid).toBeNull();
+    expect(workspace.history.canUndo).toBe(true);
+  });
+
+  it("rolls back a lock change when it makes a later removal illegal", () => {
+    const { first, workspace } = createWorkspace();
+    const note = new MidiNote(0, 0, 120, "note");
+    first.addElement(note);
+
+    expect(() => workspace.history.execute("Invalid locked delete", () => {
+      note.moveToTick(240);
+      note.locked = true;
+      first.removeElement(note.id);
+    })).toThrow(/locked/);
+
+    expect(note.grid).toBe(first);
+    expect(note.startTick).toBe(0);
+    expect(note.locked).toBe(false);
+    expect(workspace.history.canUndo).toBe(false);
+  });
+
+  it("undoes add and lock in the correct order without violating hard locking", () => {
+    const { first, workspace } = createWorkspace();
+    const note = new MidiNote(0, 0, 120, "note");
+
+    workspace.history.execute("Add locked note", () => {
+      first.addElement(note);
+      note.locked = true;
+    });
+
+    expect(note.locked).toBe(true);
+    workspace.history.undo();
+    expect(note.locked).toBe(false);
+    expect(note.grid).toBeNull();
+
+    workspace.history.redo();
+    expect(note.locked).toBe(true);
+    expect(note.grid).toBe(first);
+  });
+
 });
