@@ -1,4 +1,5 @@
 import { ChangeEmitter } from "../events/ChangeEmitter";
+
 import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
 import type {
   ElementChange,
@@ -15,7 +16,6 @@ export abstract class EditableElement {
   public readonly id: ElementId;
 
   private readonly changes = new ChangeEmitter<ElementChange>();
-
   private owningGrid: Grid | null = null;
 
   private _row: RowIndex;
@@ -35,6 +35,10 @@ export abstract class EditableElement {
   }
 
   abstract readonly resizable: boolean;
+
+  get grid(): Grid | null {
+    return this.owningGrid;
+  }
 
   onChange(listener: ChangeListener<ElementChange>): Unsubscribe {
     return this.changes.subscribe(listener);

@@ -1,82 +1,101 @@
 import { describe, expect, it, vi } from "vitest";
 import { MidiNote } from "../elements/MidiNote";
+import { EditorWorkspace } from "../workspace/EditorWorkspace";
+import { GridContainer } from "./GridContainer";
 import { MidiGrid } from "./MidiGrid";
 
-const rows = [
-  { id: "c4", label: "C4", pitch: 60 },
-  { id: "d4", label: "D4", pitch: 62 },
-];
+const rows = [{ id: "pitch-60", label: "C4", pitch: 60 }];
 
-function createGrid(id: string, rowCount = 2): MidiGrid {
-  return new MidiGrid(rows.slice(0, rowCount), id);
+function makeGrid(id: string): MidiGrid {
+  return new MidiGrid(rows, id);
 }
 
-describe("Grid element ownership and row invariants", () => {
-  it("rejects attaching the same instance to a second grid", () => {
-    const first = createGrid("first");
-    const second = createGrid("second");
-    const note = new MidiNote(0, 0, 120, "note");
+describe("Grid ownership and scoped identities", () => {
+  it("accepts elements without constructing a container or workspace", () => {
+    const grid = makeGrid("piano");
+    const note = new MidiNote(0, 0, 480, "note");
 
-    first.addElement(note);
+    expect(grid.container).toBeNull();
+    expect(note.grid).toBeNull();
 
-    expect(() => second.addElement(note)).toThrow("already belongs to a grid");
-    expect(first.getElement(note.id)).toBe(note);
-    expect(second.getElements()).toEqual([]);
-  });
-
-  it("releases ownership upon removal and allows reattachment", () => {
-    const first = createGrid("first");
-    const second = createGrid("second");
-    const note = new MidiNote(0, 0, 120, "note");
-
-    first.addElement(note);
-    expect(first.removeElement(note.id)).toBe(true);
-    second.addElement(note);
-
-    expect(first.getElement(note.id)).toBeUndefined();
-    expect(second.getElement(note.id)).toBe(note);
-  });
-
-  it("rejects a row beyond the owning grid without changing state", () => {
-    const grid = createGrid("grid");
-    const note = new MidiNote(0, 0, 120, "note");
     grid.addElement(note);
+    note.moveToTick(960);
 
+    expect(note.grid).toBe(grid);
+    expect(note.startTick).toBe(960);
+    expect(grid.getElement("note")).toBe(note);
+  });
+
+  it("allows equal element IDs in different grids in the same workspace", () => {
+    const first = makeGrid("piano");
+    const second = makeGrid("guitar");
+    const a = new MidiNote(0, 0, 480, "same-id");
+    const b = new MidiNote(0, 480, 480, "same-id");
+    const workspace = new EditorWorkspace([
+      new GridContainer([first, second], "tracks"),
+    ]);
+
+    first.addElement(a);
+    second.addElement(b);
+
+    expect(workspace.getGrids()).toEqual([first, second]);
+    expect(first.getElement("same-id")).toBe(a);
+    expect(second.getElement("same-id")).toBe(b);
+    expect(a.grid).toBe(first);
+    expect(b.grid).toBe(second);
+  });
+
+  it("rejects duplicate IDs within one grid without reparenting the rejected note", () => {
+    const grid = makeGrid("piano");
+    const first = new MidiNote(0, 0, 480, "duplicate");
+    const second = new MidiNote(0, 480, 480, "duplicate");
+    grid.addElement(first);
     const listener = vi.fn();
     grid.onChange(listener);
 
-    expect(() => { note.row = 2; }).toThrow("outside grid bounds");
-    expect(() => { note.row = -1; }).toThrow("non-negative integer");
-    expect(() => { note.row = 0.5; }).toThrow("non-negative integer");
-    expect(() => { note.row = Number.NaN; }).toThrow("non-negative integer");
-
-    expect(note.row).toBe(0);
+    expect(() => grid.addElement(second)).toThrow("Element duplicate already exists");
+    expect(grid.getElements()).toEqual([first]);
+    expect(second.grid).toBeNull();
     expect(listener).not.toHaveBeenCalled();
-
-    note.row = 1;
-    expect(note.row).toBe(1);
-    expect(listener).toHaveBeenCalledExactlyOnceWith([
-      { type: "element-updated", elementId: "note", properties: ["row"] },
-    ]);
   });
 
-  it("does not reserve ownership when attachment fails", () => {
-    const shortGrid = createGrid("short", 1);
-    const validGrid = createGrid("valid", 2);
-    const note = new MidiNote(1, 0, 120, "note");
+  it("does not allow the same note object in multiple grids", () => {
+    const piano = makeGrid("piano");
+    const guitar = makeGrid("guitar");
+    const note = new MidiNote(0, 0, 480, "shared");
 
-    expect(() => shortGrid.addElement(note)).toThrow("outside grid bounds");
-    expect(shortGrid.getElements()).toEqual([]);
+    piano.addElement(note);
 
-    validGrid.addElement(note);
-    expect(validGrid.getElement(note.id)).toBe(note);
+    expect(() => guitar.addElement(note)).toThrow(/already belongs to a grid/);
+    expect(note.grid).toBe(piano);
+    expect(guitar.getElements()).toEqual([]);
   });
 
-  it("rejects negative and fractional rows during construction", () => {
-    for (const row of [-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY]) {
-      expect(() => new MidiNote(row, 0, 120)).toThrow(
-        "Element row must be a non-negative integer",
-      );
-    }
+  it("releases element ownership on removal and allows reattachment", () => {
+    const piano = makeGrid("piano");
+    const guitar = makeGrid("guitar");
+    const note = new MidiNote(0, 0, 480, "reusable");
+    piano.addElement(note);
+
+    expect(piano.removeElement(note.id)).toBe(true);
+    expect(note.grid).toBeNull();
+
+    guitar.addElement(note);
+
+    expect(note.grid).toBe(guitar);
+    expect(guitar.getElement(note.id)).toBe(note);
+  });
+
+  it("stops forwarding events from removed elements", () => {
+    const piano = makeGrid("piano");
+    const note = new MidiNote(0, 0, 480, "note");
+    piano.addElement(note);
+    piano.removeElement(note.id);
+    const listener = vi.fn();
+    piano.onChange(listener);
+
+    note.moveToTick(240);
+
+    expect(listener).not.toHaveBeenCalled();
   });
 });

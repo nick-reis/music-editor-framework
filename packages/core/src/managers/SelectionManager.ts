@@ -1,11 +1,10 @@
 import { ChangeEmitter } from "../events/ChangeEmitter";
 import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
 import type { SelectionChange } from "../events/ModelChange";
-import type { ElementId } from "../types/ids";
+import type { EditableElement } from "../elements/EditableElement";
 
 export class SelectionManager {
-  private readonly selectedIds = new Set<ElementId>();
-
+  private readonly selectedElements = new Set<EditableElement>();
   private readonly changes = new ChangeEmitter<SelectionChange>();
 
   onChange(listener: ChangeListener<SelectionChange>): Unsubscribe {
@@ -13,89 +12,89 @@ export class SelectionManager {
   }
 
   get count(): number {
-    return this.selectedIds.size;
+    return this.selectedElements.size;
   }
 
-  isSelected(id: ElementId): boolean {
-    return this.selectedIds.has(id);
+  isSelected(element: EditableElement): boolean {
+    return this.selectedElements.has(element);
   }
 
-  select(id: ElementId): void {
-    if (this.selectedIds.has(id)) return;
+  select(element: EditableElement): void {
+    if (this.selectedElements.has(element)) return;
 
-    this.selectedIds.add(id);
+    this.selectedElements.add(element);
 
     this.changes.emit({
-      addedIds: [id],
-      removedIds: [],
+      addedElements: [element],
+      removedElements: [],
     });
   }
 
-  deselect(id: ElementId): void {
-    if (!this.selectedIds.delete(id)) return;
+  deselect(element: EditableElement): void {
+    if (!this.selectedElements.delete(element)) return;
 
     this.changes.emit({
-      addedIds: [],
-      removedIds: [id],
+      addedElements: [],
+      removedElements: [element],
     });
   }
 
-  toggle(id: ElementId): void {
-    if (this.isSelected(id)) {
-      this.deselect(id);
+  toggle(element: EditableElement): void {
+    if (this.isSelected(element)) {
+      this.deselect(element);
     } else {
-      this.select(id);
+      this.select(element);
     }
   }
 
-  setSelection(ids: Iterable<ElementId>): void {
-    const nextSelection = new Set(ids);
+  setSelection(elements: Iterable<EditableElement>): void {
+    const nextSelection = new Set(elements);
 
-    const addedIds: ElementId[] = [];
-    const removedIds: ElementId[] = [];
+    const addedElements: EditableElement[] = [];
+    const removedElements: EditableElement[] = [];
 
-    for (const id of this.selectedIds) {
-      if (!nextSelection.has(id)) {
-        removedIds.push(id);
+    for (const element of this.selectedElements) {
+      if (!nextSelection.has(element)) {
+        removedElements.push(element);
       }
     }
 
-    for (const id of nextSelection) {
-      if (!this.selectedIds.has(id)) {
-        addedIds.push(id);
+    for (const element of nextSelection) {
+      if (!this.selectedElements.has(element)) {
+        addedElements.push(element);
       }
     }
 
-    if (addedIds.length === 0 && removedIds.length === 0) {
+    if (addedElements.length === 0 && removedElements.length === 0) {
       return;
     }
 
-    this.selectedIds.clear();
+    this.selectedElements.clear();
 
-    for (const id of nextSelection) {
-      this.selectedIds.add(id);
+    for (const element of nextSelection) {
+      this.selectedElements.add(element);
     }
 
     this.changes.emit({
-      addedIds,
-      removedIds,
+      addedElements,
+      removedElements,
     });
   }
 
   clear(): void {
-    if (this.selectedIds.size === 0) return;
+    if (this.selectedElements.size === 0) return;
 
-    const removedIds = [...this.selectedIds];
+    const removedElements = [...this.selectedElements];
 
-    this.selectedIds.clear();
+    this.selectedElements.clear();
 
     this.changes.emit({
-      addedIds: [],
-      removedIds,
+      addedElements: [],
+      removedElements,
     });
   }
 
-  getSelectedIds(): ReadonlySet<ElementId> {
-    return new Set(this.selectedIds);
+  getSelectedElements(): ReadonlySet<EditableElement> {
+    return new Set(this.selectedElements);
   }
 }

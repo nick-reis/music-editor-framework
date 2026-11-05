@@ -1,3 +1,4 @@
+import type { EditableElement } from "../elements/EditableElement";
 import type { ToolId } from "../tools/ToolId";
 import type { ElementId, GridContainerId, GridId } from "../types/ids";
 import type { BPM } from "../types/time";
@@ -44,6 +45,12 @@ export type GridContainerChange =
       readonly gridId: GridId;
     }
   | {
+      readonly type: "grid-reordered";
+      readonly gridId: GridId;
+      readonly fromIndex: number;
+      readonly toIndex: number;
+    }
+  | {
       readonly type: "grid-changed";
       readonly gridId: GridId;
       readonly change: GridChange;
@@ -65,8 +72,8 @@ export type WorkspaceChange =
     };
 
 export type SelectionChange = {
-  readonly addedIds: readonly ElementId[];
-  readonly removedIds: readonly ElementId[];
+  readonly addedElements: readonly EditableElement[];
+  readonly removedElements: readonly EditableElement[];
 };
 
 export type ToolChange = {

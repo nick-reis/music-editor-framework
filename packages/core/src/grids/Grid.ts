@@ -1,12 +1,12 @@
 import { ChangeBatchEmitter } from "../events/ChangeBatchEmitter";
 
 import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
-
 import type { GridChange } from "../events/ModelChange";
 import type { GridId, ElementId } from "../types/ids";
 import type { ToolId } from "../tools/ToolId";
 import type { EditableElement } from "../elements/EditableElement";
 import type { GridRow } from "./rows/GridRow";
+import type { GridContainer } from "./GridContainer";
 
 export abstract class Grid<
   TElement extends EditableElement = EditableElement,
@@ -18,8 +18,8 @@ export abstract class Grid<
   protected readonly elements = new Map<ElementId, TElement>();
 
   private readonly changes = new ChangeBatchEmitter<GridChange>();
-
   private readonly elementSubscriptions = new Map<ElementId, Unsubscribe>();
+  private _container: GridContainer | null = null;
 
   protected constructor(
     rows: readonly TRow[],
@@ -40,8 +40,11 @@ export abstract class Grid<
   }
 
   abstract readonly supportedTools: ReadonlySet<ToolId>;
-
   abstract readonly toolFallbacks: Readonly<Partial<Record<ToolId, ToolId>>>;
+
+  get container(): GridContainer | null {
+    return this._container;
+  }
 
   onChange(listener: ChangeListener<readonly GridChange[]>): Unsubscribe {
     return this.changes.onChange(listener);
@@ -115,5 +118,29 @@ export abstract class Grid<
 
   getElements(): readonly TElement[] {
     return [...this.elements.values()];
+  }
+
+  _attachToContainer(container: GridContainer): void {
+    if (this._container !== null) {
+      throw new Error(`Grid ${this.id} already belongs to a container`);
+    }
+
+    this._container = container;
+  }
+
+  _detachFromContainer(container: GridContainer): void {
+    if (this._container !== container) {
+      throw new Error(`Grid ${this.id} does not belong to this container`);
+    }
+
+    this._container = null;
+  }
+
+  _reparentToContainer(source: GridContainer, target: GridContainer): void {
+    if (this._container !== source) {
+      throw new Error(`Grid ${this.id} does not belong to the source`);
+    }
+
+    this._container = target;
   }
 }

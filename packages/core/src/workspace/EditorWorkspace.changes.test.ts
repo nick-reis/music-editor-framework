@@ -241,7 +241,7 @@ describe("EditorWorkspace change notifications", () => {
     const listener = vi.fn();
 
     workspace.onChange(listener);
-    workspace.selection.select("clip-1");
+    workspace.selection.select(new AudioClip(0, 0, 120, 1, "clip-1"));
 
     expect(listener).not.toHaveBeenCalled();
   });

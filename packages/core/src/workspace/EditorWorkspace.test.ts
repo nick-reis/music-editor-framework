@@ -67,15 +67,15 @@ describe("EditorWorkspace", () => {
     const firstWorkspace = new EditorWorkspace();
     const secondWorkspace = new EditorWorkspace();
 
-    firstWorkspace.selection.select(sharedElement.id);
+    firstWorkspace.selection.select(sharedElement);
 
-    expect(firstWorkspace.selection.isSelected(sharedElement.id)).toBe(true);
-    expect(secondWorkspace.selection.isSelected(sharedElement.id)).toBe(false);
+    expect(firstWorkspace.selection.isSelected(sharedElement)).toBe(true);
+    expect(secondWorkspace.selection.isSelected(sharedElement)).toBe(false);
 
-    secondWorkspace.selection.select(sharedElement.id);
-    firstWorkspace.selection.deselect(sharedElement.id);
+    secondWorkspace.selection.select(sharedElement);
+    firstWorkspace.selection.deselect(sharedElement);
 
-    expect(firstWorkspace.selection.isSelected(sharedElement.id)).toBe(false);
-    expect(secondWorkspace.selection.isSelected(sharedElement.id)).toBe(true);
+    expect(firstWorkspace.selection.isSelected(sharedElement)).toBe(false);
+    expect(secondWorkspace.selection.isSelected(sharedElement)).toBe(true);
   });
 });
