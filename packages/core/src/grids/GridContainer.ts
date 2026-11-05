@@ -95,7 +95,7 @@ export class GridContainer {
 
     const after = this.updateStructure();
 
-    if (MutationCapture.recording) {
+    if (MutationCapture.isRecording(this)) {
       MutationCapture.record({
         target: this,
         before,
@@ -177,7 +177,7 @@ export class GridContainer {
       const sourceAfter = this.updateStructure();
       const targetAfter = target.updateStructure();
 
-      if (MutationCapture.recording) {
+      if (MutationCapture.isRecording(this)) {
         MutationCapture.record({
           target: this,
           before: Object.freeze({ source: sourceBefore, target: targetBefore }),
@@ -282,7 +282,7 @@ export class GridContainer {
 
     const after = this.updateStructure();
 
-    if (track && MutationCapture.recording) {
+    if (track && MutationCapture.isRecording(this)) {
       MutationCapture.record({
         target: this,
         before,
@@ -320,7 +320,7 @@ export class GridContainer {
 
     const after = this.updateStructure();
 
-    if (MutationCapture.recording) {
+    if (MutationCapture.isRecording(this)) {
       MutationCapture.record({
         target: this,
         before,
@@ -349,7 +349,7 @@ export class GridContainer {
     restored: StructureState,
     operation: () => void,
   ): void {
-    if (MutationCapture.recording) {
+    if (MutationCapture.isRecording(this)) {
       throw new Error("Cannot replay during mutation capture");
     }
     this.assertStructure(expected);
@@ -375,7 +375,7 @@ export class GridContainer {
     restoredFrom: StructureState,
     restoredTo: StructureState,
   ): void {
-    if (MutationCapture.recording) {
+    if (MutationCapture.isRecording(from) || MutationCapture.isRecording(to)) {
       throw new Error("Cannot replay during mutation capture");
     }
     from.assertStructure(expectedFrom);

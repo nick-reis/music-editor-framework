@@ -732,22 +732,31 @@ describe("GridContainer history integration", () => {
     expect(second.getGrids()).toEqual([b, c]);
   });
 
-  it("rolls back in-scope grid changes when a later operation targets another workspace", () => {
+  it("records only its own grid additions while another workspace changes", () => {
     const left = setup();
     const right = setup();
     const piano = grid("piano");
     const outside = grid("outside");
 
-    expect(() => left.workspace.history.execute("Cross-workspace", () => {
+    left.workspace.history.execute("Add grid in left", () => {
       left.first.addGrid(piano);
       right.first.addGrid(outside);
-    })).toThrow(/outside the recording scope/);
+    });
 
+    expect(left.first.getGrids()).toEqual([piano]);
+    expect(right.first.getGrids()).toEqual([outside]);
+    expect(left.workspace.history.canUndo).toBe(true);
+    expect(right.workspace.history.canUndo).toBe(false);
+
+    left.workspace.history.undo();
     expect(left.first.getGrids()).toEqual([]);
-    expect(right.first.getGrids()).toEqual([]);
+    expect(right.first.getGrids()).toEqual([outside]);
     expect(piano.container).toBeNull();
-    expect(outside.container).toBeNull();
-    expect(left.workspace.history.canUndo).toBe(false);
+    expect(outside.container).toBe(right.first);
+
+    left.workspace.history.redo();
+    expect(left.first.getGrids()).toEqual([piano]);
+    expect(right.first.getGrids()).toEqual([outside]);
   });
 
   it("rejects deletion of a locked grid without recording a history entry", () => {
@@ -818,5 +827,65 @@ describe("GridContainer history integration", () => {
 
     expect(workspace.removeContainer(added.id)).toBe(true);
     expect(added.workspace).toBeNull();
+  });
+});
+
+
+describe("GridContainer scoped history isolation", () => {
+  const rows = [{ id: "row-1", label: "C4", pitch: 60 }];
+
+  function setup(id: string) {
+    const a = new MidiGrid(rows, "a");
+    const b = new MidiGrid(rows, "b");
+    const first = new GridContainer([a, b], "first");
+    const second = new GridContainer([], "second");
+    const workspace = new EditorWorkspace([first, second], id);
+    return { a, b, first, second, workspace };
+  }
+
+  it("does not capture unrelated grid reorders or transfers", () => {
+    const left = setup("left");
+    const right = setup("right");
+    const created = new MidiGrid(rows, "created");
+
+    left.workspace.history.execute("Add in left", () => {
+      left.first.addGrid(created);
+      right.first.reorderGrid(right.a, 1);
+      right.workspace.moveGrid(right.b, right.second);
+    });
+
+    expect(left.first.getGrids()).toEqual([left.a, left.b, created]);
+    expect(right.first.getGrids()).toEqual([right.a]);
+    expect(right.second.getGrids()).toEqual([right.b]);
+
+    left.workspace.history.undo();
+    expect(left.first.getGrids()).toEqual([left.a, left.b]);
+    expect(right.first.getGrids()).toEqual([right.a]);
+    expect(right.second.getGrids()).toEqual([right.b]);
+    expect(right.workspace.history.canUndo).toBe(false);
+  });
+
+  it("maintains independent undo stacks for nested structural transactions", () => {
+    const left = setup("left");
+    const right = setup("right");
+
+    left.workspace.history.execute("Reorder left", () => {
+      left.first.reorderGrid(left.a, 1);
+      right.workspace.history.execute("Move right grid", () => {
+        right.workspace.moveGrid(right.a, right.second);
+      });
+    });
+
+    expect(left.first.getGrids()).toEqual([left.b, left.a]);
+    expect(right.first.getGrids()).toEqual([right.b]);
+    expect(right.second.getGrids()).toEqual([right.a]);
+
+    left.workspace.history.undo();
+    expect(left.first.getGrids()).toEqual([left.a, left.b]);
+    expect(right.second.getGrids()).toEqual([right.a]);
+
+    right.workspace.history.undo();
+    expect(right.first.getGrids()).toEqual([right.a, right.b]);
+    expect(right.second.getGrids()).toEqual([]);
   });
 });

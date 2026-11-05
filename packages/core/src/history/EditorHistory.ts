@@ -2,7 +2,10 @@ import { ChangeEmitter } from "../events/ChangeEmitter";
 import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
 
 import { MutationCapture } from "../mutations/MutationCapture";
-import type { ReversibleMutation } from "../mutations/MutationCapture";
+import type {
+  MutationScope,
+  ReversibleMutation,
+} from "../mutations/MutationCapture";
 
 export type EditorHistoryChange = {
   readonly canUndo: boolean;
@@ -27,6 +30,7 @@ export class EditorHistory {
 
   constructor(
     private readonly accepts: (target: object) => boolean = () => true,
+    private readonly scope?: MutationScope,
   ) {}
 
   onChange(listener: ChangeListener<EditorHistoryChange>): Unsubscribe {
@@ -55,7 +59,7 @@ export class EditorHistory {
     }
 
     return this.runGuarded(() => {
-      const capture = new MutationCapture(this.accepts);
+      const capture = new MutationCapture(this.accepts, this.scope);
       let result: R;
 
       try {

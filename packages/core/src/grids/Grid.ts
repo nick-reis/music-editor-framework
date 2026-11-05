@@ -138,7 +138,7 @@ export abstract class Grid<
     const after = restored ?? Object.freeze({ present: true });
     this.membershipStates.set(element, after);
 
-    if (MutationCapture.recording) {
+    if (MutationCapture.isRecording(this)) {
       MutationCapture.record({
         target: this,
         before,
@@ -194,7 +194,7 @@ export abstract class Grid<
     const after = restored ?? Object.freeze({ present: false });
     this.membershipStates.set(element, after);
 
-    if (MutationCapture.recording) {
+    if (MutationCapture.isRecording(this)) {
       MutationCapture.record({
         target: this,
         before,

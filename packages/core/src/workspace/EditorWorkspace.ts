@@ -15,8 +15,12 @@ export class EditorWorkspace {
   public readonly id: WorkspaceId;
   public readonly selection = new SelectionManager();
 
-  public readonly history = new EditorHistory((target) =>
-    this.ownsTarget(target),
+  public readonly history = new EditorHistory(
+    (target) => this.ownsTarget(target),
+    {
+      owner: this,
+      ownerOf: EditorWorkspace.ownerOf,
+    },
   );
 
   private readonly containers = new Map<GridContainerId, GridContainer>();
@@ -72,7 +76,7 @@ export class EditorWorkspace {
   }
 
   addContainer(container: GridContainer): void {
-    if (MutationCapture.recording) {
+    if (MutationCapture.isRecording(this)) {
       throw new Error("Container additions are not undoable yet");
     }
 
@@ -133,7 +137,7 @@ export class EditorWorkspace {
 
     if (!container) return false;
 
-    if (MutationCapture.recording) {
+    if (MutationCapture.isRecording(this)) {
       throw new Error("Container removals are not undoable yet");
     }
 
@@ -216,6 +220,9 @@ export class EditorWorkspace {
   }
 
   private ownsTarget(target: object): boolean {
+    if (target === this) {
+      return true;
+    }
     if (target instanceof GridContainer) {
       return this.getContainer(target.id) === target;
     }
@@ -235,5 +242,25 @@ export class EditorWorkspace {
       this.getGrid(grid.id) === grid &&
       grid.getElement(target.id) === target
     );
+  }
+
+  private static ownerOf(target: object): EditorWorkspace | null {
+    if (target instanceof EditorWorkspace) {
+      return target;
+    }
+
+    if (target instanceof GridContainer) {
+      return target.workspace;
+    }
+
+    if (target instanceof Grid) {
+      return target.container?.workspace ?? null;
+    }
+
+    if (target instanceof EditableElement) {
+      return target.grid?.container?.workspace ?? null;
+    }
+
+    return null;
   }
 }

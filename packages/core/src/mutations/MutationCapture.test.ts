@@ -295,3 +295,153 @@ describe("MutationCapture", () => {
     expect(note.locked).toBe(true);
   });
 });
+
+
+describe("MutationCapture workspace scoping", () => {
+  function setup() {
+    const ownerA = {};
+    const ownerB = {};
+    const noteA = new MidiNote(0, 0, 120, "a");
+    const noteB = new MidiNote(0, 0, 120, "b");
+    const ownership = new WeakMap<object, object>([
+      [noteA, ownerA],
+      [noteB, ownerB],
+    ]);
+    const ownerOf = (target: object): object | null =>
+      ownership.get(target) ?? null;
+    const captureA = () => new MutationCapture(
+      (target) => ownerOf(target) === ownerA,
+      { owner: ownerA, ownerOf },
+    );
+    const captureB = () => new MutationCapture(
+      (target) => ownerOf(target) === ownerB,
+      { owner: ownerB, ownerOf },
+    );
+    return { noteA, noteB, captureA, captureB };
+  }
+
+  it("records owned edits while leaving unrelated owned edits unrecorded", () => {
+    const { noteA, noteB, captureA } = setup();
+    const capture = captureA();
+
+    capture.run(() => {
+      expect(MutationCapture.recording).toBe(true);
+      expect(MutationCapture.isRecording(noteA)).toBe(true);
+      expect(MutationCapture.isRecording(noteB)).toBe(false);
+      noteA.moveToTick(240);
+      noteB.moveToTick(480);
+    });
+
+    expect(capture.mutations).toHaveLength(1);
+    expect(capture.mutations[0].target).toBe(noteA);
+    expect([noteA.startTick, noteB.startTick]).toEqual([240, 480]);
+    expect(MutationCapture.recording).toBe(false);
+  });
+
+  it("routes nested independent workspace edits to the correct capture", () => {
+    const { noteA, noteB, captureA, captureB } = setup();
+    const outer = captureA();
+    const inner = captureB();
+
+    outer.run(() => {
+      noteA.moveToTick(120);
+      inner.run(() => {
+        noteB.moveToTick(360);
+        noteA.moveToTick(240);
+      });
+      noteA.moveToTick(480);
+    });
+
+    expect(outer.mutations.map((item) => item.target)).toEqual([
+      noteA,
+      noteA,
+      noteA,
+    ]);
+    expect(inner.mutations.map((item) => item.target)).toEqual([noteB]);
+  });
+
+  it("rejects a second capture for an already active owner without corrupting it", () => {
+    const { noteA, captureA } = setup();
+    const first = captureA();
+    const second = captureA();
+
+    first.run(() => {
+      expect(() => second.run(() => noteA.moveToTick(120))).toThrow(
+        /already active for this scope/,
+      );
+      noteA.moveToTick(240);
+    });
+
+    expect(first.mutations).toHaveLength(1);
+    expect(second.mutations).toHaveLength(0);
+    second.run(() => noteA.moveToTick(480));
+    expect(second.mutations).toHaveLength(1);
+  });
+
+  it("rejects detached targets during a scoped capture", () => {
+    const { noteA, captureA } = setup();
+    const detached = new MidiNote(0, 0, 120, "detached");
+    const capture = captureA();
+
+    capture.run(() => {
+      noteA.moveToTick(120);
+      expect(() => detached.moveToTick(480)).toThrow(
+        /outside the recording scope/,
+      );
+    });
+
+    expect(detached.startTick).toBe(0);
+    expect(capture.mutations).toHaveLength(1);
+  });
+
+  it("unwinds nested scopes after a thrown callback", () => {
+    const { noteA, noteB, captureA, captureB } = setup();
+    const outer = captureA();
+    const failed = captureB();
+
+    outer.run(() => {
+      expect(() => failed.run(() => {
+        noteB.moveToTick(120);
+        throw new Error("inner failure");
+      })).toThrow("inner failure");
+      expect(MutationCapture.isRecording(noteA)).toBe(true);
+      expect(MutationCapture.isRecording(noteB)).toBe(false);
+      noteA.moveToTick(240);
+    });
+
+    expect(outer.mutations).toHaveLength(1);
+    expect(failed.mutations).toHaveLength(1);
+    expect(MutationCapture.recording).toBe(false);
+  });
+
+  it("rejects nesting a global capture inside a workspace scope", () => {
+    const { noteA, captureA } = setup();
+    const outer = captureA();
+    const global = new MutationCapture();
+
+    outer.run(() => {
+      expect(() => global.run(() => noteA.moveToTick(240))).toThrow(
+        /already active for this scope/,
+      );
+    });
+
+    expect(noteA.startTick).toBe(0);
+    expect(global.mutations).toHaveLength(0);
+  });
+
+  it("allows replay for another workspace while an unrelated scope records", () => {
+    const { noteA, noteB, captureA, captureB } = setup();
+    const completed = captureB();
+    completed.run(() => noteB.moveToTick(240));
+    const active = captureA();
+
+    active.run(() => {
+      noteA.moveToTick(120);
+      completed.mutations[0].undo();
+      expect(noteB.startTick).toBe(0);
+    });
+
+    expect(active.mutations).toHaveLength(1);
+    expect(completed.mutations).toHaveLength(1);
+  });
+});

@@ -7,30 +7,36 @@ export interface ReversibleMutation<TState extends object = object> {
   redo(): void;
 }
 
+export interface MutationScope {
+  readonly owner: object;
+  readonly ownerOf: (target: object) => object | null;
+}
+
 export class MutationCapture {
-  private static active: MutationCapture | null = null;
+  private static readonly stack: MutationCapture[] = [];
 
   private readonly recorded: ReversibleMutation[] = [];
   private used = false;
 
   constructor(
     private readonly accepts: (target: object) => boolean = () => true,
+    private readonly scope?: MutationScope,
   ) {}
 
   static get recording(): boolean {
-    return MutationCapture.active !== null;
+    return MutationCapture.stack.length > 0;
+  }
+
+  static isRecording(target: object): boolean {
+    return MutationCapture.resolve(target) !== null;
   }
 
   static assertTarget(target: object): void {
-    const active = MutationCapture.active;
-
-    if (active !== null && !active.accepts(target)) {
-      throw new Error("Mutation target is outside the recording scope");
-    }
+    MutationCapture.resolve(target);
   }
 
   static record(mutation: ReversibleMutation): void {
-    MutationCapture.active?.recorded.push(mutation);
+    MutationCapture.resolve(mutation.target)?.recorded.push(mutation);
   }
 
   get mutations(): readonly ReversibleMutation[] {
@@ -38,16 +44,23 @@ export class MutationCapture {
   }
 
   run<R>(operation: () => R): R {
-    if (MutationCapture.active !== null) {
-      throw new Error("A mutation capture is already active");
-    }
-
     if (this.used) {
       throw new Error("Mutation capture has already been used");
     }
 
+    if (
+      MutationCapture.stack.some(
+        (active) =>
+          active.scope === undefined ||
+          this.scope === undefined ||
+          active.scope.owner === this.scope.owner,
+      )
+    ) {
+      throw new Error("A mutation capture is already active for this scope");
+    }
+
     this.used = true;
-    MutationCapture.active = this;
+    MutationCapture.stack.push(this);
 
     try {
       const result = operation();
@@ -63,7 +76,42 @@ export class MutationCapture {
 
       return result;
     } finally {
-      MutationCapture.active = null;
+      MutationCapture.stack.pop();
     }
+  }
+
+  private static resolve(target: object): MutationCapture | null {
+    const captures = MutationCapture.stack;
+    const current = captures[captures.length - 1];
+
+    if (!current) return null;
+
+    if (!current.scope) {
+      if (!current.accepts(target)) {
+        throw new Error("Mutation target is outside the recording scope");
+      }
+
+      return current;
+    }
+
+    const owner = current.scope.ownerOf(target);
+
+    if (owner === null) {
+      throw new Error("Mutation target is outside the recording scope");
+    }
+
+    for (let index = captures.length - 1; index >= 0; index--) {
+      const capture = captures[index];
+
+      if (capture.scope?.owner !== owner) continue;
+
+      if (!capture.accepts(target)) {
+        throw new Error("Mutation target is outside the recording scope");
+      }
+
+      return capture;
+    }
+
+    return null;
   }
 }

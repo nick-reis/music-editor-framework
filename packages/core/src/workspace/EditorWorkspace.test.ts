@@ -588,7 +588,7 @@ describe("EditorWorkspace history integration", () => {
     expect(workspace.history.canUndo).toBe(false);
   });
 
-  it("rolls back valid workspace edits before an out-of-workspace target", () => {
+  it("records only its own edits while another workspace changes directly", () => {
     const left = createWorkspace();
     const right = createWorkspace();
     const inside = new MidiNote(0, 0, 120, "inside");
@@ -596,14 +596,20 @@ describe("EditorWorkspace history integration", () => {
     left.first.addElement(inside);
     right.first.addElement(outside);
 
-    expect(() => left.workspace.history.execute("Invalid group", () => {
+    left.workspace.history.execute("Left edit", () => {
       inside.moveToTick(240);
       outside.moveToTick(480);
-    })).toThrow(/outside the recording scope/);
+    });
 
-    expect(inside.startTick).toBe(0);
-    expect(outside.startTick).toBe(0);
-    expect(left.workspace.history.canUndo).toBe(false);
+    expect([inside.startTick, outside.startTick]).toEqual([240, 480]);
+    expect(left.workspace.history.canUndo).toBe(true);
+    expect(right.workspace.history.canUndo).toBe(false);
+
+    left.workspace.history.undo();
+    expect([inside.startTick, outside.startTick]).toEqual([0, 480]);
+
+    left.workspace.history.redo();
+    expect([inside.startTick, outside.startTick]).toEqual([240, 480]);
   });
 
   it("keeps history valid when moving a grid between containers in the same workspace", () => {
@@ -745,22 +751,31 @@ describe("EditorWorkspace history integration", () => {
     expect(workspace.history.canUndo).toBe(false);
   });
 
-  it("rolls back valid additions when a later addition targets another workspace", () => {
+  it("tracks only its own element additions when another workspace is edited", () => {
     const left = createWorkspace();
     const right = createWorkspace();
     const inside = new MidiNote(0, 0, 120, "inside");
     const outside = new MidiNote(0, 0, 120, "outside");
 
-    expect(() => left.workspace.history.execute("Cross-workspace", () => {
+    left.workspace.history.execute("Add in left", () => {
       left.first.addElement(inside);
       right.first.addElement(outside);
-    })).toThrow(/outside the recording scope/);
+    });
 
+    expect(inside.grid).toBe(left.first);
+    expect(outside.grid).toBe(right.first);
+    expect(left.workspace.history.canUndo).toBe(true);
+    expect(right.workspace.history.canUndo).toBe(false);
+
+    left.workspace.history.undo();
     expect(inside.grid).toBeNull();
-    expect(outside.grid).toBeNull();
+    expect(outside.grid).toBe(right.first);
     expect(left.first.getElements()).toEqual([]);
-    expect(right.first.getElements()).toEqual([]);
-    expect(left.workspace.history.canUndo).toBe(false);
+    expect(right.first.getElements()).toEqual([outside]);
+
+    left.workspace.history.redo();
+    expect(left.first.getElements()).toEqual([inside]);
+    expect(right.first.getElements()).toEqual([outside]);
   });
 
   it("supports moving a note between two owned grids in a history action", () => {
@@ -928,4 +943,174 @@ describe("EditorWorkspace history integration", () => {
     expect(note.grid).toBe(first);
   });
 
+});
+
+
+describe("EditorWorkspace scoped history behavior", () => {
+  function setup(id: string) {
+    const grid = new MidiGrid([
+      { id: "c4", label: "C4", pitch: 60 },
+      { id: "d4", label: "D4", pitch: 62 },
+    ], "piano");
+    const container = new GridContainer([grid], "tracks");
+    const workspace = new EditorWorkspace([container], id);
+    const note = new MidiNote(0, 0, 120, "note");
+    grid.addElement(note);
+    return { workspace, container, grid, note };
+  }
+
+  it("records nested independent workspace histories separately", () => {
+    const a = setup("a");
+    const b = setup("b");
+
+    a.workspace.history.execute("Edit A", () => {
+      a.note.moveToTick(240);
+      b.workspace.history.execute("Edit B", () => {
+        b.note.moveToTick(480);
+      });
+      a.note.resizeToDuration(240);
+    });
+
+    expect(a.workspace.history.undoLabel).toBe("Edit A");
+    expect(b.workspace.history.undoLabel).toBe("Edit B");
+    expect([a.note.startTick, a.note.durationTicks]).toEqual([240, 240]);
+    expect(b.note.startTick).toBe(480);
+
+    a.workspace.history.undo();
+    expect([a.note.startTick, a.note.durationTicks]).toEqual([0, 120]);
+    expect(b.note.startTick).toBe(480);
+
+    b.workspace.history.undo();
+    expect(b.note.startTick).toBe(0);
+    a.workspace.history.redo();
+    b.workspace.history.redo();
+    expect([a.note.startTick, a.note.durationTicks, b.note.startTick]).toEqual([
+      240, 240, 480,
+    ]);
+  });
+
+  it("records edits to the outer workspace even while the inner scope is active", () => {
+    const a = setup("a");
+    const b = setup("b");
+
+    a.workspace.history.execute("A changes", () => {
+      a.note.moveToTick(120);
+      b.workspace.history.execute("B changes", () => {
+        a.note.moveToTick(240);
+        b.note.moveToTick(480);
+      });
+      a.note.moveToTick(360);
+    });
+
+    expect(a.note.startTick).toBe(360);
+    expect(b.note.startTick).toBe(480);
+    a.workspace.history.undo();
+    expect(a.note.startTick).toBe(0);
+    expect(b.note.startTick).toBe(480);
+    b.workspace.history.undo();
+    expect(b.note.startTick).toBe(0);
+  });
+
+  it("keeps the original transaction usable after a nested other-workspace failure", () => {
+    const a = setup("a");
+    const b = setup("b");
+
+    a.workspace.history.execute("Continue A", () => {
+      a.note.moveToTick(120);
+      expect(() => b.workspace.history.execute("Invalid B", () => {
+        b.note.moveToTick(480);
+        throw new Error("failed in B");
+      })).toThrow("failed in B");
+      a.note.moveToTick(240);
+    });
+
+    expect(a.note.startTick).toBe(240);
+    expect(b.note.startTick).toBe(0);
+    expect(a.workspace.history.canUndo).toBe(true);
+    expect(b.workspace.history.canUndo).toBe(false);
+    a.workspace.history.undo();
+    expect(a.note.startTick).toBe(0);
+  });
+
+  it("keeps an independent direct edit when the recording workspace rolls back", () => {
+    const a = setup("a");
+    const b = setup("b");
+
+    expect(() => a.workspace.history.execute("Fail A", () => {
+      a.note.moveToTick(120);
+      b.note.moveToTick(480);
+      throw new Error("abort A");
+    })).toThrow("abort A");
+
+    expect(a.note.startTick).toBe(0);
+    expect(b.note.startTick).toBe(480);
+    expect(a.workspace.history.canUndo).toBe(false);
+    expect(b.workspace.history.canUndo).toBe(false);
+  });
+
+  it("allows container management in a different workspace but rejects its own", () => {
+    const a = setup("a");
+    const b = setup("b");
+    const extra = new GridContainer([], "extra");
+
+    a.workspace.history.execute("A edit", () => {
+      b.workspace.addContainer(extra);
+      expect(b.workspace.getContainer(extra.id)).toBe(extra);
+      expect(b.workspace.removeContainer(extra.id)).toBe(true);
+      expect(() => a.workspace.addContainer(new GridContainer([], "blocked")))
+        .toThrow(/not undoable yet/);
+      expect(() => a.workspace.removeContainer(a.container.id))
+        .toThrow(/not undoable yet/);
+      a.note.moveToTick(240);
+    });
+
+    expect(a.workspace.history.canUndo).toBe(true);
+    expect(b.workspace.getContainer(extra.id)).toBeUndefined();
+    a.workspace.history.undo();
+    expect(a.note.startTick).toBe(0);
+  });
+
+  it("rejects nested operations on the same history without committing partial changes", () => {
+    const a = setup("a");
+
+    expect(() => a.workspace.history.execute("Outer", () => {
+      a.note.moveToTick(120);
+      a.workspace.history.execute("Inner", () => a.note.moveToTick(240));
+    })).toThrow(/already executing/);
+
+    expect(a.note.startTick).toBe(0);
+    expect(a.workspace.history.canUndo).toBe(false);
+  });
+
+  it("can undo another workspace while its own recording remains active", () => {
+    const a = setup("a");
+    const b = setup("b");
+    b.workspace.history.execute("B first", () => b.note.moveToTick(480));
+
+    a.workspace.history.execute("A next", () => {
+      a.note.moveToTick(120);
+      expect(b.workspace.history.undo()).toBe(true);
+    });
+
+    expect(b.note.startTick).toBe(0);
+    expect(b.workspace.history.canRedo).toBe(true);
+    a.workspace.history.undo();
+    expect(a.note.startTick).toBe(0);
+    expect(b.note.startTick).toBe(0);
+    b.workspace.history.redo();
+    expect(b.note.startTick).toBe(480);
+  });
+
+  it("does not add history for unrelated edits if the recording workspace is unchanged", () => {
+    const a = setup("a");
+    const b = setup("b");
+
+    a.workspace.history.execute("Only B changed", () => {
+      b.note.moveToTick(480);
+    });
+
+    expect(a.workspace.history.canUndo).toBe(false);
+    expect(b.workspace.history.canUndo).toBe(false);
+    expect(b.note.startTick).toBe(480);
+  });
 });

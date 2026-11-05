@@ -174,7 +174,7 @@ export abstract class EditableElement<
 
     this._state = next;
 
-    if (capture && MutationCapture.recording) {
+    if (capture && MutationCapture.isRecording(this)) {
       MutationCapture.record({
         target: this,
         before,
@@ -191,7 +191,7 @@ export abstract class EditableElement<
     expected: Readonly<FullState<TExtra>>,
     target: Readonly<FullState<TExtra>>,
   ): void {
-    if (MutationCapture.recording) {
+    if (MutationCapture.isRecording(this)) {
       throw new Error("Cannot replay during mutation capture");
     }
 
