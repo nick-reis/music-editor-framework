@@ -1440,3 +1440,286 @@ describe("EditorWorkspace direct-edit history invalidation", () => {
     expect(workspace.history.undoLabel).toBeNull();
   });
 });
+
+
+describe("EditorWorkspace transaction notification isolation", () => {
+  const rows = [{ id: "c4", label: "C4", pitch: 60 }];
+
+  function setup(id = "workspace") {
+    const grid = new MidiGrid(rows, "piano");
+    const container = new GridContainer([grid], "tracks");
+    const workspace = new EditorWorkspace([container], id);
+    const note = new MidiNote(0, 0, 120, "note");
+    grid.addElement(note);
+
+    const elementEvents = vi.fn();
+    const gridEvents = vi.fn();
+    const containerEvents = vi.fn();
+    const workspaceEvents = vi.fn();
+    const historyEvents = vi.fn();
+
+    note.onChange(elementEvents);
+    grid.onChange(gridEvents);
+    container.onChange(containerEvents);
+    workspace.onChange(workspaceEvents);
+    workspace.history.onChange(historyEvents);
+
+    return {
+      note, grid, container, workspace,
+      elementEvents, gridEvents, containerEvents,
+      workspaceEvents, historyEvents,
+    };
+  }
+
+  it("holds every level of external notification until commit", () => {
+    const state = setup();
+
+    state.workspace.history.execute("Move and resize", () => {
+      state.note.moveToTick(240);
+      state.note.resizeToDuration(480);
+
+      expect(state.elementEvents).not.toHaveBeenCalled();
+      expect(state.gridEvents).not.toHaveBeenCalled();
+      expect(state.containerEvents).not.toHaveBeenCalled();
+      expect(state.workspaceEvents).not.toHaveBeenCalled();
+      expect(state.historyEvents).not.toHaveBeenCalled();
+    });
+
+    expect(state.note.startTick).toBe(240);
+    expect(state.note.durationTicks).toBe(480);
+    expect(state.elementEvents).toHaveBeenCalledTimes(2);
+    expect(state.gridEvents).toHaveBeenCalledTimes(2);
+    expect(state.containerEvents).toHaveBeenCalledTimes(2);
+    expect(state.workspaceEvents).toHaveBeenCalledTimes(2);
+    expect(state.historyEvents).toHaveBeenCalledTimes(1);
+    expect(state.workspace.history.undoLabel).toBe("Move and resize");
+  });
+
+  it("suppresses forward and rollback notifications when execution fails", () => {
+    const state = setup();
+
+    expect(() => state.workspace.history.execute("Invalid", () => {
+      state.note.moveToTick(240);
+      state.note.resizeToDuration(0);
+    })).toThrow(/Invalid element timing/);
+
+    expect(state.note.startTick).toBe(0);
+    expect(state.note.durationTicks).toBe(120);
+    expect(state.workspace.history.canUndo).toBe(false);
+    expect(state.elementEvents).not.toHaveBeenCalled();
+    expect(state.gridEvents).not.toHaveBeenCalled();
+    expect(state.containerEvents).not.toHaveBeenCalled();
+    expect(state.workspaceEvents).not.toHaveBeenCalled();
+    expect(state.historyEvents).not.toHaveBeenCalled();
+  });
+
+  it("lets observers query the final committed state for earlier events", () => {
+    const state = setup();
+    const positions: number[] = [];
+    state.note.onChange(() => positions.push(state.note.startTick));
+
+    state.workspace.history.execute("Move twice", () => {
+      state.note.moveToTick(240);
+      state.note.moveToTick(480);
+    });
+
+    expect(positions).toEqual([480, 480]);
+  });
+
+  it("keeps selection when a deleted note is restored during rollback", () => {
+    const state = setup();
+    state.workspace.selection.select(state.note);
+    const selected = vi.fn();
+    state.workspace.selection.onChange(selected);
+
+    expect(() => state.workspace.history.execute("Cancelled delete", () => {
+      state.grid.removeElement(state.note.id);
+      throw new Error("Cancelled");
+    })).toThrow("Cancelled");
+
+    expect(state.grid.getElement(state.note.id)).toBe(state.note);
+    expect(state.workspace.selection.isSelected(state.note)).toBe(true);
+    expect(selected).not.toHaveBeenCalled();
+    expect(state.workspaceEvents).not.toHaveBeenCalled();
+  });
+
+  it("reconciles selection before reporting committed removals", () => {
+    const state = setup();
+    state.workspace.selection.select(state.note);
+    let selectedDuringNotification: boolean | undefined;
+
+    state.workspace.onChange(() => {
+      selectedDuringNotification = state.workspace.selection.isSelected(state.note);
+    });
+
+    state.workspace.history.execute("Delete", () => {
+      state.grid.removeElement(state.note.id);
+      expect(state.workspace.selection.isSelected(state.note)).toBe(true);
+    });
+
+    expect(state.workspace.selection.isSelected(state.note)).toBe(false);
+    expect(selectedDuringNotification).toBe(false);
+  });
+
+  it("deduplicates selection reconciliation for multiple removed notes", () => {
+    const state = setup();
+    const second = new MidiNote(0, 240, 120, "second");
+    state.grid.addElement(second);
+    state.workspace.selection.setSelection([state.note, second]);
+
+    const listener = vi.fn();
+    state.workspace.selection.onChange(listener);
+
+    state.workspace.history.execute("Delete both", () => {
+      state.grid.removeElement(state.note.id);
+      state.grid.removeElement(second.id);
+    });
+
+    expect(state.workspace.selection.count).toBe(0);
+    expect(listener).toHaveBeenCalledExactlyOnceWith({
+      addedElements: [],
+      removedElements: [state.note, second],
+    });
+  });
+
+  it("permits nested history transactions in independent workspaces", () => {
+    const left = setup("left");
+    const right = setup("right");
+
+    left.workspace.history.execute("Left", () => {
+      left.note.moveToTick(240);
+
+      right.workspace.history.execute("Right", () => {
+        right.note.moveToTick(480);
+      });
+
+      expect(left.workspaceEvents).not.toHaveBeenCalled();
+      expect(right.workspaceEvents).toHaveBeenCalledTimes(1);
+    });
+
+    expect(left.workspaceEvents).toHaveBeenCalledTimes(1);
+    expect(left.workspace.history.canUndo).toBe(true);
+    expect(right.workspace.history.canUndo).toBe(true);
+  });
+
+  it("does not suppress direct edits in another workspace on failed rollback", () => {
+    const left = setup("left");
+    const right = setup("right");
+
+    expect(() => left.workspace.history.execute("Abort left", () => {
+      left.note.moveToTick(240);
+      right.note.moveToTick(480);
+      throw new Error("Abort");
+    })).toThrow("Abort");
+
+    expect(left.note.startTick).toBe(0);
+    expect(right.note.startTick).toBe(480);
+    expect(left.workspaceEvents).not.toHaveBeenCalled();
+    expect(right.workspaceEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies on undo and redo after replay has completed", () => {
+    const state = setup();
+    state.workspace.history.execute("Move", () => state.note.moveToTick(480));
+
+    state.elementEvents.mockClear();
+    state.workspaceEvents.mockClear();
+
+    expect(state.workspace.history.undo()).toBe(true);
+    expect(state.note.startTick).toBe(0);
+    expect(state.elementEvents).toHaveBeenCalledTimes(1);
+    expect(state.workspaceEvents).toHaveBeenCalledTimes(1);
+    state.elementEvents.mockClear();
+    state.workspaceEvents.mockClear();
+
+    expect(state.workspace.history.redo()).toBe(true);
+    expect(state.note.startTick).toBe(480);
+    expect(state.elementEvents).toHaveBeenCalledTimes(1);
+    expect(state.workspaceEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it("continues delivering direct model edits synchronously", () => {
+    const state = setup();
+
+    state.note.moveToTick(240);
+
+    expect(state.elementEvents).toHaveBeenCalledTimes(1);
+    expect(state.workspaceEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a buffered event when its listener unsubscribes and re-subscribes", () => {
+    const state = setup();
+    const listener = vi.fn();
+    const unsubscribe = state.note.onChange(listener);
+
+    state.workspace.history.execute("Move", () => {
+      state.note.moveToTick(240);
+      unsubscribe();
+      state.note.onChange(listener);
+    });
+
+    expect(listener).not.toHaveBeenCalled();
+    state.note.moveToTick(480);
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not create events for a transaction with no effective changes", () => {
+    const state = setup();
+
+    state.workspace.history.execute("No-op", () => {
+      state.note.moveToTick(0);
+      state.note.resizeToDuration(120);
+    });
+
+    expect(state.workspace.history.canUndo).toBe(false);
+    expect(state.elementEvents).not.toHaveBeenCalled();
+    expect(state.workspaceEvents).not.toHaveBeenCalled();
+    expect(state.historyEvents).not.toHaveBeenCalled();
+  });
+
+  it("publishes available events if rollback itself fails", () => {
+    const state = setup();
+
+    expect(() => state.workspace.history.execute("Broken operation", () => {
+      state.note.moveToTick(240);
+
+      MutationCapture.record({
+        target: state.note,
+        before: {},
+        after: {},
+        undo: () => {
+          state.note.moveToTick(480);
+          throw new Error("Rollback failed");
+        },
+        redo: () => {},
+      });
+
+      throw new Error("Operation failed");
+    })).toThrow(/rollback was incomplete/);
+
+    expect(state.note.startTick).toBe(480);
+    expect(state.workspace.history.canUndo).toBe(false);
+    expect(state.workspaceEvents).toHaveBeenCalled();
+  });
+
+  it("retains full hierarchy propagation during undo of grid transfers", () => {
+    const state = setup();
+    const destination = new GridContainer([], "destination");
+    state.workspace.addContainer(destination);
+    const listener = vi.fn();
+    state.workspace.onChange(listener);
+
+    state.workspace.history.execute("Transfer", () => {
+      state.workspace.moveGrid(state.grid, destination);
+    });
+
+    expect(state.grid.container).toBe(destination);
+    expect(listener).toHaveBeenCalled();
+    listener.mockClear();
+
+    expect(state.workspace.history.undo()).toBe(true);
+    expect(state.grid.container).toBe(state.container);
+    expect(state.workspace.history.canRedo).toBe(true);
+    expect(listener).toHaveBeenCalled();
+  });
+});

@@ -1,4 +1,5 @@
 import { ChangeEmitter } from "../events/ChangeEmitter";
+import { NotificationTransaction } from "../events/NotificationTransaction";
 import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
 
 import { MutationCapture } from "../mutations/MutationCapture";
@@ -24,7 +25,9 @@ type ReplayDirection = "undo" | "redo";
 export class EditorHistory {
   private readonly undoStack: HistoryEntry[] = [];
   private readonly redoStack: HistoryEntry[] = [];
-  private readonly changes = new ChangeEmitter<EditorHistoryChange>();
+  private readonly changes = new ChangeEmitter<EditorHistoryChange>(
+    () => this.scope?.owner ?? null,
+  );
 
   private executing = false;
   private invalidationPending = false;
@@ -59,7 +62,7 @@ export class EditorHistory {
       throw new Error("History entry label must not be empty");
     }
 
-    return this.runGuarded(() => {
+    return this.runTransaction(() => {
       const capture = new MutationCapture(this.accepts, this.scope);
       let result: R;
 
@@ -69,6 +72,7 @@ export class EditorHistory {
         try {
           this.replay(capture.mutations, "undo");
         } catch (rollbackError) {
+          this.markRecoveryIncomplete();
           throw new AggregateError(
             [error, rollbackError],
             "History operation failed and rollback was incomplete",
@@ -91,7 +95,7 @@ export class EditorHistory {
   }
 
   undo(): boolean {
-    return this.runGuarded(() => {
+    return this.runTransaction(() => {
       const entry = this.undoStack.at(-1);
 
       if (!entry) return false;
@@ -107,7 +111,7 @@ export class EditorHistory {
   }
 
   redo(): boolean {
-    return this.runGuarded(() => {
+    return this.runTransaction(() => {
       const entry = this.redoStack.at(-1);
 
       if (!entry) return false;
@@ -185,6 +189,7 @@ export class EditorHistory {
       }
 
       if (recoveryErrors.length > 0) {
+        this.markRecoveryIncomplete();
         throw new AggregateError(
           [error, ...recoveryErrors],
           "History replay failed and recovery was incomplete",
@@ -204,6 +209,20 @@ export class EditorHistory {
       undoLabel: this.undoLabel,
       redoLabel: this.redoLabel,
     });
+  }
+
+  private markRecoveryIncomplete(): void {
+    // The model may be partially updated; invalidate history and publish
+    // the available notifications for observers to resynchronize.
+    this.invalidateOnDirectEdit();
+    NotificationTransaction.publishOnFailure(this.scope?.owner ?? null);
+  }
+
+  private runTransaction<R>(operation: () => R): R {
+    return NotificationTransaction.run(
+      this.scope?.owner ?? null,
+      () => this.runGuarded(operation),
+    );
   }
 
   private runGuarded<R>(operation: () => R): R {

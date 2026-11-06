@@ -19,7 +19,9 @@ export class GridContainer {
   public readonly id: GridContainerId;
 
   private readonly grids = new Map<GridId, Grid>();
-  private readonly changes = new ChangeBatchEmitter<GridContainerChange>();
+  private readonly changes = new ChangeBatchEmitter<GridContainerChange>(
+    () => this.workspace,
+  );
   private readonly gridSubscriptions = new Map<GridId, Unsubscribe>();
   private structure: StructureState = Object.freeze({
     grids: Object.freeze([]),
@@ -58,6 +60,13 @@ export class GridContainer {
     listener: ChangeListener<readonly GridContainerChange[]>,
   ): Unsubscribe {
     return this.changes.onChange(listener);
+  }
+
+  /** @internal Used by EditorWorkspace for forwarding. */
+  onInternalChange(
+    listener: ChangeListener<readonly GridContainerChange[]>,
+  ): Unsubscribe {
+    return this.changes.onInternalChange(listener);
   }
 
   batchChanges<R>(operation: () => R): R {
@@ -160,7 +169,7 @@ export class GridContainer {
     const destinationGrids = [...target.grids.values()];
     destinationGrids.splice(insertAt, 0, grid);
 
-    const destinationSubscription = grid.onChange((changes) => {
+    const destinationSubscription = grid.onInternalChange((changes) => {
       target.emitGridChanges(grid.id, changes);
     });
 
@@ -252,7 +261,7 @@ export class GridContainer {
 
     if (track) MutationCapture.assertTarget(this);
     const before = this.structure;
-    const unsubscribe = grid.onChange((changes) => {
+    const unsubscribe = grid.onInternalChange((changes) => {
       this.emitGridChanges(grid.id, changes);
     });
 

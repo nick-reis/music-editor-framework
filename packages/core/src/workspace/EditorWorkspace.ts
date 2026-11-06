@@ -1,4 +1,5 @@
 import { ChangeBatchEmitter } from "../events/ChangeBatchEmitter";
+import { NotificationTransaction } from "../events/NotificationTransaction";
 import { MutationCapture } from "../mutations/MutationCapture";
 import { attachContainerToWorkspace, detachContainerFromWorkspace } from "../internal/ModelOwnership";
 
@@ -25,7 +26,9 @@ export class EditorWorkspace {
   );
 
   private readonly containers = new Map<GridContainerId, GridContainer>();
-  private readonly changes = new ChangeBatchEmitter<WorkspaceChange>();
+  private readonly changes = new ChangeBatchEmitter<WorkspaceChange>(
+    () => this,
+  );
 
   private readonly containerSubscriptions = new Map<
     GridContainerId,
@@ -97,7 +100,7 @@ export class EditorWorkspace {
       }
     }
 
-    const unsubscribe = container.onChange((changes) => {
+    const unsubscribe = container.onInternalChange((changes) => {
       this.changes.batch(() => {
         for (const change of changes) {
           if (
@@ -215,13 +218,15 @@ export class EditorWorkspace {
   }
 
   private reconcileSelection(): void {
-    this.selection.setSelection(
-      [...this.selection.getSelectedElements()].filter(
-        (element) =>
-          element.grid !== null &&
-          this.getGrid(element.grid.id) === element.grid,
-      ),
-    );
+    NotificationTransaction.afterCommit(this, this.selection, () => {
+      this.selection.setSelection(
+        [...this.selection.getSelectedElements()].filter(
+          (element) =>
+            element.grid !== null &&
+            this.getGrid(element.grid.id) === element.grid,
+        ),
+      );
+    });
   }
 
   private ownsTarget(target: object): boolean {

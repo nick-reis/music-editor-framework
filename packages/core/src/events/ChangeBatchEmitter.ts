@@ -2,13 +2,23 @@ import { ChangeEmitter } from "./ChangeEmitter";
 import type { ChangeListener, Unsubscribe } from "./ChangeEmitter";
 
 export class ChangeBatchEmitter<T> {
-  private readonly changes = new ChangeEmitter<readonly T[]>();
-
+  private readonly changes: ChangeEmitter<readonly T[]>;
   private pending: T[] = [];
   private depth = 0;
 
+  constructor(owner: () => object | null = () => null) {
+    this.changes = new ChangeEmitter<readonly T[]>(owner);
+  }
+
   onChange(listener: ChangeListener<readonly T[]>): Unsubscribe {
     return this.changes.subscribe(listener);
+  }
+
+  /** @internal Used only for model-to-model forwarding. */
+  onInternalChange(
+    listener: ChangeListener<readonly T[]>,
+  ): Unsubscribe {
+    return this.changes.subscribeInternal(listener);
   }
 
   emit(change: T): void {

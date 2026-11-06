@@ -4,6 +4,7 @@ import {
   attachElementToGrid,
   detachElementFromGrid,
   getGridContainer,
+  getOwningWorkspace,
 } from "../internal/ModelOwnership";
 
 import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
@@ -25,7 +26,9 @@ export abstract class Grid<
 
   private readonly elements = new Map<ElementId, TElement>();
 
-  private readonly changes = new ChangeBatchEmitter<GridChange>();
+  private readonly changes = new ChangeBatchEmitter<GridChange>(
+    () => getOwningWorkspace(this),
+  );
   private readonly elementSubscriptions = new Map<ElementId, Unsubscribe>();
   private readonly membershipStates = new WeakMap<TElement, MembershipState>();
 
@@ -56,6 +59,11 @@ export abstract class Grid<
 
   onChange(listener: ChangeListener<readonly GridChange[]>): Unsubscribe {
     return this.changes.onChange(listener);
+  }
+
+  /** @internal Used by GridContainer for forwarding. */
+  onInternalChange(listener: ChangeListener<readonly GridChange[]>): Unsubscribe {
+    return this.changes.onInternalChange(listener);
   }
 
   batchChanges<R>(operation: () => R): R {
@@ -129,7 +137,7 @@ export abstract class Grid<
       this.elements.set(item.id, item);
     }
 
-    const unsubscribe = element.onChange((change) => {
+    const unsubscribe = element.onInternalChange((change) => {
       this.changes.emit({
         type: "element-updated",
         elementId: change.elementId,

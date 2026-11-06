@@ -1,6 +1,6 @@
 import { ChangeEmitter } from "../events/ChangeEmitter";
 import { MutationCapture } from "../mutations/MutationCapture";
-import { getElementGrid } from "../internal/ModelOwnership";
+import { getElementGrid, getOwningWorkspace } from "../internal/ModelOwnership";
 
 import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
 import type {
@@ -26,7 +26,9 @@ export abstract class EditableElement<
 > {
   public readonly id: ElementId;
 
-  private readonly changes = new ChangeEmitter<ElementChange>();
+  private readonly changes = new ChangeEmitter<ElementChange>(
+    () => getOwningWorkspace(this),
+  );
   private _state: Readonly<FullState<TExtra>>;
 
   protected constructor(
@@ -56,6 +58,11 @@ export abstract class EditableElement<
 
   onChange(listener: ChangeListener<ElementChange>): Unsubscribe {
     return this.changes.subscribe(listener);
+  }
+
+  /** @internal Used by Grid to forward element changes. */
+  onInternalChange(listener: ChangeListener<ElementChange>): Unsubscribe {
+    return this.changes.subscribeInternal(listener);
   }
 
   protected notifyChange(
