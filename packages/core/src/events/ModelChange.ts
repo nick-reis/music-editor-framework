@@ -69,6 +69,12 @@ export type WorkspaceChange =
       readonly containerId: GridContainerId;
     }
   | {
+      readonly type: "container-reordered";
+      readonly containerId: GridContainerId;
+      readonly fromIndex: number;
+      readonly toIndex: number;
+    }
+  | {
       readonly type: "container-changed";
       readonly containerId: GridContainerId;
       readonly change: GridContainerChange;

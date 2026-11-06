@@ -6,6 +6,12 @@ import type { EditorWorkspace } from "../workspace/EditorWorkspace";
 const gridsByElement = new WeakMap<EditableElement, Grid>();
 const containersByGrid = new WeakMap<Grid, GridContainer>();
 const workspacesByContainer = new WeakMap<GridContainer, EditorWorkspace>();
+const registeredWorkspaces = new WeakSet<EditorWorkspace>();
+
+/** @internal Enables ownership resolution for mutations targeting the workspace itself. */
+export function registerWorkspace(workspace: EditorWorkspace): void {
+  registeredWorkspaces.add(workspace);
+}
 
 export function getElementGrid(element: EditableElement): Grid | null {
   return gridsByElement.get(element) ?? null;
@@ -118,6 +124,10 @@ export function detachContainerFromWorkspace(
 }
 
 export function getOwningWorkspace(target: object): EditorWorkspace | null {
+  if (registeredWorkspaces.has(target as EditorWorkspace)) {
+    return target as EditorWorkspace;
+  }
+
   const workspace = workspacesByContainer.get(target as GridContainer);
   if (workspace) return workspace;
 

@@ -1,7 +1,11 @@
 import { ChangeBatchEmitter } from "../events/ChangeBatchEmitter";
 import { NotificationTransaction } from "../events/NotificationTransaction";
 import { MutationCapture } from "../mutations/MutationCapture";
-import { attachContainerToWorkspace, detachContainerFromWorkspace } from "../internal/ModelOwnership";
+import {
+  attachContainerToWorkspace,
+  detachContainerFromWorkspace,
+  registerWorkspace,
+} from "../internal/ModelOwnership";
 
 import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
 import type { WorkspaceChange } from "../events/ModelChange";
@@ -12,6 +16,10 @@ import { GridContainer } from "../grids/GridContainer";
 import { SelectionManager } from "../managers/SelectionManager";
 import { EditorHistory } from "../history/EditorHistory";
 import { EditableElement } from "../elements/EditableElement";
+
+type StructureState = Readonly<{
+  containers: readonly GridContainer[];
+}>;
 
 export class EditorWorkspace {
   public readonly id: WorkspaceId;
@@ -26,6 +34,9 @@ export class EditorWorkspace {
   );
 
   private readonly containers = new Map<GridContainerId, GridContainer>();
+  private structure: StructureState = Object.freeze({
+    containers: Object.freeze([]),
+  });
   private readonly changes = new ChangeBatchEmitter<WorkspaceChange>(
     () => this,
   );
@@ -66,8 +77,10 @@ export class EditorWorkspace {
       }
     }
 
+    registerWorkspace(this);
+
     for (const container of containers) {
-      this.addContainer(container);
+      this.insertContainer(container, this.containerCount, false);
     }
   }
 
@@ -79,100 +92,74 @@ export class EditorWorkspace {
     return this.changes.batch(operation);
   }
 
-  addContainer(container: GridContainer): void {
-    if (MutationCapture.isRecording(this)) {
-      throw new Error("Container additions are not undoable yet");
-    }
-
-    if (this.containers.has(container.id)) {
-      throw new Error(`GridContainer ${container.id} already exists`);
-    }
-
-    if (container.workspace !== null) {
-      throw new Error(
-        `GridContainer ${container.id} already belongs to a workspace`,
-      );
-    }
-
-    for (const grid of container.getGrids()) {
-      if (this.getGrid(grid.id)) {
-        throw new Error(`Grid ${grid.id} already exists in this document`);
-      }
-    }
-
-    const unsubscribe = container.onInternalChange((changes) => {
-      this.changes.batch(() => {
-        for (const change of changes) {
-          if (
-            change.type === "grid-removed" ||
-            (change.type === "grid-changed" &&
-              change.change.type === "element-removed")
-          ) {
-            this.reconcileSelection();
-          }
-
-          this.changes.emit({
-            type: "container-changed",
-            containerId: container.id,
-            change,
-          });
-        }
-      });
-    });
-
-    try {
-      attachContainerToWorkspace(container, this);
-    } catch (error) {
-      unsubscribe();
-      throw error;
-    }
-
-    this.containers.set(container.id, container);
-    this.containerSubscriptions.set(container.id, unsubscribe);
-
-    this.history.invalidateOnDirectEdit();
-
-    this.changes.emit({
-      type: "container-added",
-      containerId: container.id,
-    });
+  /**
+   * Append by default, or insert at a zero-based index in [0, containerCount].
+   * Direct calls invalidate history; calls inside history.execute are undoable.
+   */
+  addContainer(container: GridContainer, index = this.containerCount): void {
+    this.insertContainer(container, index);
   }
 
   removeContainer(id: GridContainerId): boolean {
     const container = this.containers.get(id);
-
     if (!container) return false;
 
-    if (MutationCapture.isRecording(this)) {
-      throw new Error("Container removals are not undoable yet");
+    this.removeExactContainer(container);
+    return true;
+  }
+
+  reorderContainer(container: GridContainer, index: number): void {
+    if (this.containers.get(container.id) !== container) {
+      throw new Error(
+        `GridContainer ${container.id} does not belong to this workspace`,
+      );
     }
 
-    for (const grid of container.getGrids()) {
-      const lockedElement = grid
-        .getElements()
-        .find((element) => element.locked);
-
-      if (lockedElement) {
-        throw new Error(`Element ${lockedElement.id} is locked`);
-      }
+    if (
+      !Number.isInteger(index) ||
+      index < 0 ||
+      index >= this.containerCount
+    ) {
+      throw new RangeError("Invalid container index");
     }
 
-    detachContainerFromWorkspace(container, this);
+    const ordered = [...this.containers.values()];
+    const fromIndex = ordered.indexOf(container);
+    if (fromIndex === index) return;
 
-    this.containerSubscriptions.get(id)?.();
-    this.containerSubscriptions.delete(id);
-    this.containers.delete(id);
+    MutationCapture.assertTarget(this);
+    const before = this.structure;
 
-    this.history.invalidateOnDirectEdit();
+    ordered.splice(fromIndex, 1);
+    ordered.splice(index, 0, container);
 
-    this.reconcileSelection();
+    this.containers.clear();
+    for (const item of ordered) {
+      this.containers.set(item.id, item);
+    }
 
-    this.changes.emit({
-      type: "container-removed",
-      containerId: id,
+    const after = this.updateStructure();
+
+    MutationCapture.record({
+      target: this,
+      before,
+      after,
+      undo: () =>
+        this.replayStructure(after, before, () =>
+          this.reorderContainer(container, fromIndex),
+        ),
+      redo: () =>
+        this.replayStructure(before, after, () =>
+          this.reorderContainer(container, index),
+        ),
     });
 
-    return true;
+    this.changes.emit({
+      type: "container-reordered",
+      containerId: container.id,
+      fromIndex,
+      toIndex: index,
+    });
   }
 
   moveGrid(grid: Grid, target: GridContainer, index?: number): void {
@@ -215,6 +202,174 @@ export class EditorWorkspace {
 
   get containerCount(): number {
     return this.containers.size;
+  }
+
+  private insertContainer(
+    container: GridContainer,
+    index: number,
+    track = true,
+  ): void {
+    if (this.containers.has(container.id)) {
+      throw new Error(`GridContainer ${container.id} already exists`);
+    }
+
+    if (container.workspace !== null) {
+      throw new Error(
+        `GridContainer ${container.id} already belongs to a workspace`,
+      );
+    }
+
+    if (
+      !Number.isInteger(index) ||
+      index < 0 ||
+      index > this.containerCount
+    ) {
+      throw new RangeError("Invalid container insertion index");
+    }
+
+    for (const grid of container.getGrids()) {
+      if (this.getGrid(grid.id)) {
+        throw new Error(`Grid ${grid.id} already exists in this document`);
+      }
+    }
+
+    if (track) MutationCapture.assertTarget(this);
+    const before = this.structure;
+
+    const unsubscribe = container.onInternalChange((changes) => {
+      this.changes.batch(() => {
+        for (const change of changes) {
+          if (
+            change.type === "grid-removed" ||
+            (change.type === "grid-changed" &&
+              change.change.type === "element-removed")
+          ) {
+            this.reconcileSelection();
+          }
+
+          this.changes.emit({
+            type: "container-changed",
+            containerId: container.id,
+            change,
+          });
+        }
+      });
+    });
+
+    try {
+      attachContainerToWorkspace(container, this);
+    } catch (error) {
+      unsubscribe();
+      throw error;
+    }
+
+    const ordered = [...this.containers.values()];
+    ordered.splice(index, 0, container);
+    this.containers.clear();
+    for (const item of ordered) {
+      this.containers.set(item.id, item);
+    }
+    this.containerSubscriptions.set(container.id, unsubscribe);
+
+    const after = this.updateStructure();
+
+    if (track) {
+      MutationCapture.record({
+        target: this,
+        before,
+        after,
+        undo: () =>
+          this.replayStructure(after, before, () =>
+            this.removeExactContainer(container),
+          ),
+        redo: () =>
+          this.replayStructure(before, after, () =>
+            this.insertContainer(container, index),
+          ),
+      });
+    }
+
+    this.changes.emit({
+      type: "container-added",
+      containerId: container.id,
+    });
+  }
+
+  private removeExactContainer(container: GridContainer): void {
+    if (this.containers.get(container.id) !== container) {
+      throw new Error(
+        `GridContainer ${container.id} is no longer the same workspace member`,
+      );
+    }
+
+    for (const grid of container.getGrids()) {
+      const lockedElement = grid
+        .getElements()
+        .find((element) => element.locked);
+
+      if (lockedElement) {
+        throw new Error(`Element ${lockedElement.id} is locked`);
+      }
+    }
+
+    MutationCapture.assertTarget(this);
+    const before = this.structure;
+    const index = [...this.containers.keys()].indexOf(container.id);
+
+    detachContainerFromWorkspace(container, this);
+
+    this.containerSubscriptions.get(container.id)?.();
+    this.containerSubscriptions.delete(container.id);
+    this.containers.delete(container.id);
+
+    const after = this.updateStructure();
+
+    MutationCapture.record({
+      target: this,
+      before,
+      after,
+      undo: () =>
+        this.replayStructure(after, before, () =>
+          this.insertContainer(container, index),
+        ),
+      redo: () =>
+        this.replayStructure(before, after, () =>
+          this.removeExactContainer(container),
+        ),
+    });
+
+    this.reconcileSelection();
+
+    this.changes.emit({
+      type: "container-removed",
+      containerId: container.id,
+    });
+  }
+
+  private updateStructure(): StructureState {
+    this.structure = Object.freeze({
+      containers: Object.freeze([...this.containers.values()]),
+    });
+    return this.structure;
+  }
+
+  private replayStructure(
+    expected: StructureState,
+    restored: StructureState,
+    operation: () => void,
+  ): void {
+    if (MutationCapture.isRecording(this)) {
+      throw new Error("Cannot replay during mutation capture");
+    }
+
+    if (this.structure !== expected) {
+      throw new Error(
+        `EditorWorkspace ${this.id} was modified outside this mutation`,
+      );
+    }
+
+    operation();
+    this.structure = restored;
   }
 
   private reconcileSelection(): void {

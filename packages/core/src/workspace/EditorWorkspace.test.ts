@@ -1049,19 +1049,19 @@ describe("EditorWorkspace scoped history behavior", () => {
     expect(b.workspace.history.canUndo).toBe(false);
   });
 
-  it("allows container management in a different workspace but rejects its own", () => {
+  it("records same-workspace container changes while allowing independent direct edits", () => {
     const a = setup("a");
     const b = setup("b");
     const extra = new GridContainer([], "extra");
+    const added = new GridContainer([], "added");
 
     a.workspace.history.execute("A edit", () => {
       b.workspace.addContainer(extra);
       expect(b.workspace.getContainer(extra.id)).toBe(extra);
       expect(b.workspace.removeContainer(extra.id)).toBe(true);
-      expect(() => a.workspace.addContainer(new GridContainer([], "blocked")))
-        .toThrow(/not undoable yet/);
-      expect(() => a.workspace.removeContainer(a.container.id))
-        .toThrow(/not undoable yet/);
+
+      a.workspace.addContainer(added, 0);
+      expect(a.workspace.getContainers()).toEqual([added, a.container]);
       a.note.moveToTick(240);
     });
 
@@ -1069,6 +1069,11 @@ describe("EditorWorkspace scoped history behavior", () => {
     expect(b.workspace.getContainer(extra.id)).toBeUndefined();
     a.workspace.history.undo();
     expect(a.note.startTick).toBe(0);
+    expect(a.workspace.getContainers()).toEqual([a.container]);
+    expect(added.workspace).toBeNull();
+    a.workspace.history.redo();
+    expect(a.workspace.getContainers()).toEqual([added, a.container]);
+    expect(a.note.startTick).toBe(240);
   });
 
   it("rejects nested operations on the same history without committing partial changes", () => {
@@ -1721,5 +1726,275 @@ describe("EditorWorkspace transaction notification isolation", () => {
     expect(state.grid.container).toBe(state.container);
     expect(state.workspace.history.canRedo).toBe(true);
     expect(listener).toHaveBeenCalled();
+  });
+});
+
+
+describe("EditorWorkspace undoable container structure", () => {
+  const rows = [{ id: "c4", label: "C4", pitch: 60 }];
+
+  function make(id: string) {
+    const grid = new MidiGrid(rows, id + "-grid");
+    const note = new MidiNote(0, 0, 120, id + "-note");
+    grid.addElement(note);
+    return { container: new GridContainer([grid], id), grid, note };
+  }
+
+  it("appends by default and inserts at explicit zero-based indices", () => {
+    const a = new GridContainer([], "a");
+    const b = new GridContainer([], "b");
+    const c = new GridContainer([], "c");
+    const d = new GridContainer([], "d");
+    const e = new GridContainer([], "e");
+    const workspace = new EditorWorkspace([a, b]);
+    workspace.addContainer(c);
+    workspace.addContainer(d, 0);
+    workspace.addContainer(e, 2);
+    expect(workspace.getContainers()).toEqual([d, a, e, b, c]);
+  });
+
+  it("validates insertion indices without changing the model or history", () => {
+    const workspace = new EditorWorkspace([new GridContainer([], "original")]);
+    workspace.history.execute("Add", () =>
+      workspace.addContainer(new GridContainer([], "recorded")),
+    );
+    const candidate = new GridContainer([], "candidate");
+    for (const bad of [-1, 3, 0.5, Number.NaN, Infinity]) {
+      expect(() => workspace.addContainer(candidate, bad))
+        .toThrow(/Invalid container insertion index/);
+    }
+    expect(candidate.workspace).toBeNull();
+    expect(workspace.getContainers().map((item) => item.id))
+      .toEqual(["original", "recorded"]);
+    expect(workspace.history.canUndo).toBe(true);
+  });
+
+  it("undoes and redoes indexed insertion while preserving all instances", () => {
+    const a = make("a");
+    const b = make("b");
+    const c = make("c");
+    const workspace = new EditorWorkspace([a.container, c.container]);
+    const listener = vi.fn();
+    workspace.onChange(listener);
+    workspace.history.execute("Add in middle", () => {
+      workspace.addContainer(b.container, 1);
+      expect(listener).not.toHaveBeenCalled();
+    });
+    expect(workspace.getContainers()).toEqual([a.container, b.container, c.container]);
+    expect(listener).toHaveBeenCalledExactlyOnceWith([
+      { type: "container-added", containerId: "b" },
+    ]);
+    expect(workspace.history.undo()).toBe(true);
+    expect(workspace.getContainers()).toEqual([a.container, c.container]);
+    expect(b.container.workspace).toBeNull();
+    expect(b.grid.container).toBe(b.container);
+    expect(b.note.grid).toBe(b.grid);
+    expect(workspace.history.redo()).toBe(true);
+    expect(workspace.getContainers()).toEqual([a.container, b.container, c.container]);
+    expect(workspace.getContainer("b")).toBe(b.container);
+    expect(workspace.getGrid(b.grid.id)).toBe(b.grid);
+  });
+
+  it("undoes and redoes removal in the original position", () => {
+    const a = make("a");
+    const b = make("b");
+    const c = make("c");
+    const workspace = new EditorWorkspace([a.container, b.container, c.container]);
+    workspace.history.execute("Remove", () => {
+      expect(workspace.removeContainer("b")).toBe(true);
+    });
+    expect(workspace.getContainers()).toEqual([a.container, c.container]);
+    expect(b.container.workspace).toBeNull();
+    expect(workspace.history.undo()).toBe(true);
+    expect(workspace.getContainers()).toEqual([a.container, b.container, c.container]);
+    expect(b.note.grid).toBe(b.grid);
+    expect(workspace.history.redo()).toBe(true);
+    expect(workspace.getContainers()).toEqual([a.container, c.container]);
+  });
+
+  it("reorders with correctly indexed events, undo, and redo", () => {
+    const a = new GridContainer([], "a");
+    const b = new GridContainer([], "b");
+    const c = new GridContainer([], "c");
+    const workspace = new EditorWorkspace([a, b, c]);
+    const listener = vi.fn();
+    workspace.onChange(listener);
+    workspace.history.execute("Reorder", () => workspace.reorderContainer(a, 2));
+    expect(workspace.getContainers()).toEqual([b, c, a]);
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
+      type: "container-reordered", containerId: "a",
+      fromIndex: 0, toIndex: 2,
+    }]);
+    listener.mockClear();
+    expect(workspace.history.undo()).toBe(true);
+    expect(workspace.getContainers()).toEqual([a, b, c]);
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
+      type: "container-reordered", containerId: "a",
+      fromIndex: 2, toIndex: 0,
+    }]);
+    listener.mockClear();
+    expect(workspace.history.redo()).toBe(true);
+    expect(workspace.getContainers()).toEqual([b, c, a]);
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
+      type: "container-reordered", containerId: "a",
+      fromIndex: 0, toIndex: 2,
+    }]);
+  });
+
+  it("preserves history for reorder no-ops, invalid indices and missing removals", () => {
+    const a = new GridContainer([], "a");
+    const b = new GridContainer([], "b");
+    const workspace = new EditorWorkspace([a, b]);
+    workspace.history.execute("Reorder", () => workspace.reorderContainer(a, 1));
+    workspace.reorderContainer(a, 1);
+    expect(workspace.removeContainer("missing")).toBe(false);
+    for (const bad of [-1, 2, 0.2, Number.NaN]) {
+      expect(() => workspace.reorderContainer(a, bad)).toThrow(/Invalid container index/);
+    }
+    expect(() => workspace.reorderContainer(new GridContainer([], "foreign"), 0))
+      .toThrow(/does not belong/);
+    expect(workspace.history.canUndo).toBe(true);
+    expect(workspace.history.undo()).toBe(true);
+    expect(workspace.getContainers()).toEqual([a, b]);
+  });
+
+  it("invalidates undo history for direct add, remove, and reorder", () => {
+    const a = new GridContainer([], "a");
+    const b = new GridContainer([], "b");
+    const c = new GridContainer([], "c");
+    const workspace = new EditorWorkspace([a, b]);
+
+    workspace.history.execute("First", () => workspace.reorderContainer(a, 1));
+    workspace.addContainer(c, 0);
+    expect(workspace.history.canUndo).toBe(false);
+
+    workspace.history.execute("Second", () => workspace.reorderContainer(a, 0));
+    workspace.removeContainer(c.id);
+    expect(workspace.history.canUndo).toBe(false);
+
+    workspace.history.execute("Third", () => workspace.reorderContainer(a, 1));
+    workspace.reorderContainer(a, 0);
+    expect(workspace.history.canUndo).toBe(false);
+  });
+
+  it("restores structure and selection without notifications on failed compound edits", () => {
+    const a = make("a");
+    const b = make("b");
+    const extra = make("extra");
+    const workspace = new EditorWorkspace([a.container, b.container]);
+    workspace.selection.select(a.note);
+    const listener = vi.fn();
+    const selected = vi.fn();
+    workspace.onChange(listener);
+    workspace.selection.onChange(selected);
+
+    expect(() => workspace.history.execute("Broken", () => {
+      workspace.removeContainer(a.container.id);
+      workspace.addContainer(extra.container, 0);
+      workspace.reorderContainer(extra.container, 1);
+      throw new Error("cancel");
+    })).toThrow("cancel");
+    expect(workspace.getContainers()).toEqual([a.container, b.container]);
+    expect(a.container.workspace).toBe(workspace);
+    expect(extra.container.workspace).toBeNull();
+    expect(workspace.selection.isSelected(a.note)).toBe(true);
+    expect(listener).not.toHaveBeenCalled();
+    expect(selected).not.toHaveBeenCalled();
+    expect(workspace.history.canUndo).toBe(false);
+  });
+
+  it("blocks removing locked descendants and preserves existing history", () => {
+    const target = make("target");
+    const workspace = new EditorWorkspace([target.container]);
+    target.note.setLocked(true);
+    workspace.history.execute("Add sibling", () =>
+      workspace.addContainer(new GridContainer([], "sibling")),
+    );
+    expect(() => workspace.removeContainer(target.container.id)).toThrow(/locked/);
+    expect(target.container.workspace).toBe(workspace);
+    expect(workspace.history.undoLabel).toBe("Add sibling");
+  });
+
+  it("allows a recorded unlock then removal and restores lock through undo", () => {
+    const target = make("target");
+    const workspace = new EditorWorkspace([target.container]);
+    target.note.setLocked(true);
+    workspace.history.execute("Unlock and remove", () => {
+      target.note.setLocked(false);
+      workspace.removeContainer(target.container.id);
+    });
+    expect(target.container.workspace).toBeNull();
+    expect(workspace.history.undo()).toBe(true);
+    expect(target.container.workspace).toBe(workspace);
+    expect(target.note.locked).toBe(true);
+    expect(workspace.history.redo()).toBe(true);
+    expect(target.container.workspace).toBeNull();
+    expect(target.note.locked).toBe(false);
+  });
+
+  it("does not duplicate forwarded events after repeated undo and redo", () => {
+    const target = make("target");
+    const workspace = new EditorWorkspace();
+    workspace.history.execute("Add", () => workspace.addContainer(target.container));
+    workspace.history.undo();
+    workspace.history.redo();
+    workspace.history.undo();
+    workspace.history.redo();
+    const listener = vi.fn();
+    workspace.onChange(listener);
+    target.note.moveToTick(480);
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
+      type: "container-changed", containerId: "target",
+      change: {
+        type: "grid-changed", gridId: "target-grid",
+        change: {
+          type: "element-updated", elementId: "target-note",
+          properties: ["startTick"],
+        },
+      },
+    }]);
+  });
+
+  it("undoes compound insertion, grid transfer and container reorder", () => {
+    const a = make("a");
+    const b = make("b");
+    const workspace = new EditorWorkspace([a.container]);
+
+    workspace.history.execute("Build tracks", () => {
+      workspace.addContainer(b.container, 0);
+      workspace.moveGrid(a.grid, b.container, 1);
+      workspace.reorderContainer(a.container, 0);
+    });
+    expect(workspace.getContainers()).toEqual([a.container, b.container]);
+    expect(a.grid.container).toBe(b.container);
+
+    expect(workspace.history.undo()).toBe(true);
+    expect(workspace.getContainers()).toEqual([a.container]);
+    expect(a.grid.container).toBe(a.container);
+    expect(b.container.workspace).toBeNull();
+
+    expect(workspace.history.redo()).toBe(true);
+    expect(workspace.getContainers()).toEqual([a.container, b.container]);
+    expect(a.grid.container).toBe(b.container);
+  });
+
+  it("refuses to restore a removed container adopted by another workspace", () => {
+    const target = make("target");
+    const first = new EditorWorkspace([target.container], "first");
+    const second = new EditorWorkspace([], "second");
+    first.history.execute("Remove", () => first.removeContainer(target.container.id));
+    second.addContainer(target.container);
+    expect(() => first.history.undo()).toThrow(/already belongs to a workspace/);
+    expect(first.history.canUndo).toBe(true);
+    expect(first.getContainer(target.container.id)).toBeUndefined();
+    expect(second.getContainer(target.container.id)).toBe(target.container);
+  });
+
+  it("does not create history during constructor initialization", () => {
+    const a = new GridContainer([], "a");
+    const b = new GridContainer([], "b");
+    const workspace = new EditorWorkspace([a, b]);
+    expect(workspace.history.canUndo).toBe(false);
+    expect(workspace.getContainers()).toEqual([a, b]);
   });
 });

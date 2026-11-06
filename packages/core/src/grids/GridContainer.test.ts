@@ -805,26 +805,33 @@ describe("GridContainer history integration", () => {
     expect(first.getGrids()).toEqual([b, c, a]);
   });
 
-  it("blocks container membership operations inside history but allows them outside", () => {
+  it("records workspace container membership operations and preserves direct edits", () => {
     const { workspace } = setup();
     const added = new GridContainer([], "added");
 
-    expect(() => workspace.history.execute("Add container", () => {
+    workspace.history.execute("Add container", () => {
       workspace.addContainer(added);
-    })).toThrow(/not undoable yet/);
+    });
+
+    expect(added.workspace).toBe(workspace);
+    expect(workspace.getContainer(added.id)).toBe(added);
+    expect(workspace.history.undo()).toBe(true);
     expect(added.workspace).toBeNull();
     expect(workspace.getContainer(added.id)).toBeUndefined();
 
-    workspace.addContainer(added);
+    expect(workspace.history.redo()).toBe(true);
     expect(added.workspace).toBe(workspace);
 
-    expect(() => workspace.history.execute("Remove container", () => {
+    workspace.history.execute("Remove container", () => {
       workspace.removeContainer(added.id);
-    })).toThrow(/not undoable yet/);
+    });
+    expect(added.workspace).toBeNull();
+    expect(workspace.history.undo()).toBe(true);
     expect(added.workspace).toBe(workspace);
 
     expect(workspace.removeContainer(added.id)).toBe(true);
     expect(added.workspace).toBeNull();
+    expect(workspace.history.canUndo).toBe(false);
   });
 });
 
