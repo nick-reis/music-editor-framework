@@ -14,6 +14,7 @@ import type { ToolId } from "../tools/ToolId";
 import type { EditableElement } from "../elements/EditableElement";
 import type { GridRow } from "./rows/GridRow";
 import type { GridContainer } from "./GridContainer";
+import type { Timeline } from "../timeline/Timeline";
 
 type MembershipState = Readonly<{ present: boolean }>;
 
@@ -55,6 +56,18 @@ export abstract class Grid<
 
   get container(): GridContainer | null {
     return getGridContainer(this);
+  }
+
+  /**
+   * Resolve the owning project timeline for developer-facing creation APIs.
+   * A detached grid has no authoritative coordinate system.
+   */
+  protected requireTimeline(): Timeline {
+    const timeline = this.container?.workspace?.timeline;
+    if (!timeline) {
+      throw new Error("Grid must belong to a workspace before creating elements");
+    }
+    return timeline;
   }
 
   onChange(listener: ChangeListener<readonly GridChange[]>): Unsubscribe {

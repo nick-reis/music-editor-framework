@@ -1,7 +1,7 @@
 import type { EditableElement } from "../elements/EditableElement";
 import type { ToolId } from "../tools/ToolId";
 import type { ElementId, GridContainerId, GridId } from "../types/ids";
-import type { BPM } from "../types/time";
+import type { BPM, Tick, TimeSignature } from "../types/time";
 
 export interface ElementState {
   row: number;
@@ -94,7 +94,19 @@ export type ToolChange = {
   readonly selectedTool: ToolId;
 };
 
-export type TimelineChange = {
-  readonly previousBpm: BPM;
-  readonly bpm: BPM;
-};
+export type TimelineChange =
+  | {
+      readonly type: "bpm";
+      readonly previousBpm: BPM;
+      readonly bpm: BPM;
+    }
+  | {
+      readonly type: "time-signature";
+      readonly previousTimeSignature: TimeSignature;
+      readonly timeSignature: TimeSignature;
+    }
+  | {
+      readonly type: "length";
+      readonly previousLengthTicks: Tick;
+      readonly lengthTicks: Tick;
+    };

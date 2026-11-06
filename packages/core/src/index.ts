@@ -5,6 +5,8 @@ export { AudioClip } from "./elements/AudioClip";
 export { Grid } from "./grids/Grid";
 export { MidiGrid } from "./grids/MidiGrid";
 export { AudioGrid } from "./grids/AudioGrid";
+export type { MidiNoteCreation } from "./grids/MidiGrid";
+export type { AudioClipCreation } from "./grids/AudioGrid";
 export { GridContainer } from "./grids/GridContainer";
 
 export type { GridRow } from "./grids/rows/GridRow";
@@ -51,7 +53,11 @@ export type { RowIndex, GridPosition, ScreenPoint } from "./types/coordinates";
 
 // Time
 export { TICKS_PER_QUARTER_NOTE } from "./types/time";
-export type { Tick, Seconds, BPM } from "./types/time";
+export type {
+  Tick, Seconds, BPM, MusicalPosition, SecondsPosition, Position,
+  MusicalDuration, SecondsDuration, Duration, MusicalOffset, Offset,
+  TimeSignature,
+} from "./types/time";
 
 // History
 export { EditorHistory } from "./history/EditorHistory";

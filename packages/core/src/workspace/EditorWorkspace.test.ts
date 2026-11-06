@@ -2041,7 +2041,7 @@ describe("EditorWorkspace timeline transaction integration", () => {
     expect(workspace.history.undoLabel).toBe("Tempo");
     expect(listener).toHaveBeenCalledExactlyOnceWith([{
       type: "timeline-changed",
-      change: { previousBpm: 120, bpm: 90 },
+      change: { type: "bpm", previousBpm: 120, bpm: 90 },
     }]);
 
     listener.mockClear();
@@ -2049,7 +2049,7 @@ describe("EditorWorkspace timeline transaction integration", () => {
     expect(workspace.timeline.bpm).toBe(120);
     expect(listener).toHaveBeenCalledExactlyOnceWith([{
       type: "timeline-changed",
-      change: { previousBpm: 90, bpm: 120 },
+      change: { type: "bpm", previousBpm: 90, bpm: 120 },
     }]);
 
     expect(workspace.history.redo()).toBe(true);

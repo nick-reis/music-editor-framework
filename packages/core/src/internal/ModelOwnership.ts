@@ -42,6 +42,10 @@ export function attachElementToGrid(
     throw new Error("Element row is outside grid bounds");
   }
 
+  // Validate against the destination workspace before changing ownership.
+  const workspace = grid.container?.workspace;
+  if (workspace) workspace.timeline.assertFitsElement(element);
+
   gridsByElement.set(element, grid);
 }
 
@@ -70,6 +74,13 @@ export function attachGridToContainer(
 ): void {
   if (getGridContainer(grid) !== null) {
     throw new Error(`Grid ${grid.id} already belongs to a container`);
+  }
+
+  const workspace = container.workspace;
+  if (workspace) {
+    for (const element of grid.getElements()) {
+      workspace.timeline.assertFitsElement(element);
+    }
   }
 
   containersByGrid.set(grid, container);
@@ -118,6 +129,12 @@ export function attachContainerToWorkspace(
     throw new Error(
       `GridContainer ${container.id} already belongs to a workspace`,
     );
+  }
+
+  for (const grid of container.getGrids()) {
+    for (const element of grid.getElements()) {
+      workspace.timeline.assertFitsElement(element);
+    }
   }
 
   workspacesByContainer.set(container, workspace);

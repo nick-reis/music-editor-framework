@@ -113,7 +113,7 @@ describe("AudioClip native-time projection", () => {
     expect(gridChanges).not.toHaveBeenCalled();
     expect(workspaceChanges).toHaveBeenCalledExactlyOnceWith([{
       type: "timeline-changed",
-      change: { previousBpm: 120, bpm: 60 },
+      change: { type: "bpm", previousBpm: 120, bpm: 60 },
     }]);
   });
 

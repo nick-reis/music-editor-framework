@@ -82,6 +82,16 @@ export class EditorWorkspace {
       }
     }
 
+    // Validate all restored content before registering ownership. An invalid
+    // initial document must not strand a caller-supplied timeline in the registry.
+    for (const container of containers) {
+      for (const grid of container.getGrids()) {
+        for (const element of grid.getElements()) {
+          timeline.assertFitsElement(element);
+        }
+      }
+    }
+
     attachTimelineToWorkspace(timeline, this);
     this._timeline = timeline;
     this.timeline.onInternalChange((change) => {

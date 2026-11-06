@@ -83,6 +83,7 @@ describe("Timeline change notifications", () => {
     expect(timeline.bpm).toBe(140);
 
     expect(listener).toHaveBeenCalledExactlyOnceWith({
+      type: "bpm",
       previousBpm: 120,
       bpm: 140,
     });
@@ -98,11 +99,13 @@ describe("Timeline change notifications", () => {
     timeline.setBpm(90);
 
     expect(listener).toHaveBeenNthCalledWith(1, {
+      type: "bpm",
       previousBpm: 120,
       bpm: 140,
     });
 
     expect(listener).toHaveBeenNthCalledWith(2, {
+      type: "bpm",
       previousBpm: 140,
       bpm: 90,
     });

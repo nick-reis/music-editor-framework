@@ -11,7 +11,8 @@ import type {
 
 import type { ElementId } from "../types/ids";
 import type { RowIndex } from "../types/coordinates";
-import type { Tick } from "../types/time";
+import type { Tick, BPM, Position, Offset } from "../types/time";
+import type { Timeline } from "../timeline/Timeline";
 import type { Grid } from "../grids/Grid";
 
 type FullState<TExtra extends object> = ElementState & TExtra;
@@ -116,6 +117,63 @@ export abstract class EditableElement<
     return this.startTick + this.durationTicks;
   }
 
+  /**
+   * Move to an absolute musical or seconds position.
+   * Detached elements require an explicit timeline.
+   */
+  moveTo(position: Position, timeline?: Timeline): void {
+    const context = this.resolveTimeline(timeline);
+    const startTick = context.toTick(position);
+    context.assertFitsElement(this, { startTick });
+    this.moveToTick(startTick);
+  }
+
+  /** Move by a signed musical or seconds displacement. */
+  moveBy(offset: Offset, timeline?: Timeline): void {
+    const context = this.resolveTimeline(timeline);
+    const startTick = this.startTick + context.toTickDelta(offset, this.startTick);
+    context.assertFitsElement(this, { startTick });
+    this.moveToTick(startTick);
+  }
+
+  /**
+   * Grow or shrink the duration by a signed displacement.
+   * This is additive, not a replacement for resizeToDuration().
+   */
+  resizeBy(offset: Offset, timeline?: Timeline): void {
+    if (!this.resizable) {
+      throw new Error("Element cannot be resized");
+    }
+    const context = this.resolveTimeline(timeline);
+    const durationTicks = this.durationTicks + context.toTickDelta(offset, this.getEndTick());
+    context.assertFitsElement(this, { durationTicks });
+    this.resizeToDuration(durationTicks);
+  }
+
+  /** @internal Subclasses can project source durations against proposed tempo. */
+  durationTicksForTimeline(
+    _timeline: Timeline,
+    _startTick: Tick,
+    storedDurationTicks: Tick,
+    _bpm: BPM,
+  ): Tick {
+    return storedDurationTicks;
+  }
+
+  private resolveTimeline(explicit?: Timeline): Timeline {
+    const attached = this.grid?.container?.workspace?.timeline;
+    if (attached) {
+      if (explicit && attached !== explicit) {
+        throw new Error("Element belongs to a different timeline");
+      }
+      return attached;
+    }
+    if (!explicit) {
+      throw new Error("Detached element requires an explicit timeline");
+    }
+    return explicit;
+  }
+
   moveToTick(startTick: Tick): void {
     this.updateState({ startTick });
   }
@@ -163,6 +221,11 @@ export abstract class EditableElement<
 
     this.validateSharedState(next);
     this.validateState(next);
+
+    this.grid?.container?.workspace?.timeline.assertFitsElement(this, {
+      startTick: next.startTick,
+      durationTicks: next.durationTicks,
+    });
 
     const changesLock = properties.includes("locked");
     const changesOther = properties.some((property) => property !== "locked");

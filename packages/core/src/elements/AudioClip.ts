@@ -1,7 +1,7 @@
 import { EditableElement } from "./EditableElement";
 import type { ElementId } from "../types/ids";
 import type { RowIndex } from "../types/coordinates";
-import type { Tick, Seconds } from "../types/time";
+import type { Tick, Seconds, BPM } from "../types/time";
 import type { Timeline } from "../timeline/Timeline";
 
 /**
@@ -53,6 +53,7 @@ export class AudioClip extends EditableElement {
       id,
     );
     clip.importTimeline = timeline;
+    timeline.assertFitsElement(clip);
     return clip;
   }
 
@@ -71,5 +72,15 @@ export class AudioClip extends EditableElement {
     return timeline
       ? timeline.durationSecondsToTicks(this.startTick, this.sourceDurationSeconds)
       : super.durationTicks;
+  }
+
+  /** @internal Audio spans use native seconds even during BPM preflight. */
+  override durationTicksForTimeline(
+    timeline: Timeline,
+    startTick: Tick,
+    _storedDurationTicks: Tick,
+    bpm: BPM,
+  ): Tick {
+    return timeline.durationAtBpm(startTick, this.sourceDurationSeconds, bpm);
   }
 }
