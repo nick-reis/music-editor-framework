@@ -29,6 +29,7 @@ import type {
   Position,
   TimeSignature,
   TimelineOptions,
+  TimelineTransportChange,
   ToolId as ToolIdentifier,
   Unsubscribe,
   WorkspaceChange,
@@ -83,6 +84,26 @@ function consumerContract(): void {
   const meter: TimeSignature = [4, 4];
   const timeline = new Timeline(options);
   timeline.setTimeSignature(meter);
+  const stopTransport = timeline.onTransportChange(
+    (change: TimelineTransportChange) => {
+      if (change.type === "playhead-moved") {
+        const tick: number = change.tick;
+        void tick;
+      } else {
+        const playing: boolean = change.isPlaying;
+        void playing;
+      }
+    },
+  );
+  timeline.seekPlayhead({ bar: 2, beat: 3, tick: 120 });
+  timeline.seekPlayhead({ seconds: 1.5 });
+  timeline.seekPlayheadTick(480.25);
+  timeline.play();
+  timeline.pause();
+  timeline.resetPlayhead();
+  const playheadPosition: number = timeline.playheadTick;
+  const playbackActive: boolean = timeline.isPlaying;
+  void stopTransport; void playheadPosition; void playbackActive;
 
   const midiRows: MidiRow[] = [{ id: "c4", label: "C4", pitch: 60 }];
   const midi = new MidiGrid(midiRows, "midi");

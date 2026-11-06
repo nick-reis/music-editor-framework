@@ -34,6 +34,7 @@ export type {
   SelectionChange,
   ToolChange,
   TimelineChange,
+  TimelineTransportChange,
 } from "./events/ModelChange";
 
 // Tools

@@ -2,7 +2,10 @@ import { ChangeEmitter } from "../events/ChangeEmitter";
 import { EditExecutor } from "../editing/EditExecutor";
 import { getOwningWorkspace } from "../internal/ModelOwnership";
 import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
-import type { TimelineChange } from "../events/ModelChange";
+import type {
+  TimelineChange,
+  TimelineTransportChange,
+} from "../events/ModelChange";
 import type { EditableElement } from "../elements/EditableElement";
 import type {
   Tick, Seconds, BPM, Position, MusicalPosition, Duration, Offset,
@@ -37,6 +40,18 @@ export class Timeline {
     () => getOwningWorkspace(this),
   );
 
+  // Transport is runtime state, intentionally separate from _state and
+  // EditExecutor/MutationCapture. Subscriptions are not workspace notifications.
+  private _playheadTick: Tick = 0;
+  private _isPlaying = false;
+  private transportAnchorTick: Tick = 0;
+  private transportAnchorMs = 0;
+  private transportTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly transportChanges = new ChangeEmitter<TimelineTransportChange>();
+
+  /** UI update cadence, NOT a musical time step. Elapsed time drives position. */
+  private static readonly TRANSPORT_REFRESH_MS = 16;
+
   constructor(bpm?: BPM);
   constructor(options?: TimelineOptions);
   constructor(config: BPM | TimelineOptions = 120) {
@@ -68,6 +83,80 @@ export class Timeline {
   /** @internal Workspace propagation remains synchronous during transactions. */
   onInternalChange(listener: ChangeListener<TimelineChange>): Unsubscribe {
     return this.changes.subscribeInternal(listener);
+  }
+
+  /**
+   * Runtime transport events. These never enter document undo/redo, and are
+   * intentionally absent from workspace timeline-changed notifications.
+   */
+  onTransportChange(
+    listener: ChangeListener<TimelineTransportChange>,
+  ): Unsubscribe {
+    return this.transportChanges.subscribe(listener);
+  }
+
+  /**
+   * Read the continuously projected tick (including between timer callbacks).
+   * Reading this property does not publish events or modify document state.
+   */
+  get playheadTick(): Tick {
+    return this.projectPlayhead(performance.now());
+  }
+
+  get isPlaying(): boolean {
+    return this._isPlaying;
+  }
+
+  /** Begin/resume playback, restarting from zero if already at the end. */
+  play(): void {
+    if (this._isPlaying) return;
+    if (this._playheadTick >= this.lengthTicks) {
+      this.setPlayheadTick(0);
+    }
+
+    this.transportAnchorTick = this._playheadTick;
+    this.transportAnchorMs = performance.now();
+    this._isPlaying = true;
+    this.transportTimer = setInterval(
+      () => this.advanceTransport(performance.now()),
+      Timeline.TRANSPORT_REFRESH_MS,
+    );
+    this.transportChanges.emit({ type: "playback-changed", isPlaying: true });
+  }
+
+  /** Freeze at the exact position reached according to the monotonic clock. */
+  pause(): void {
+    if (!this._isPlaying) return;
+    this.advanceTransport(performance.now());
+    this.stopTransport();
+  }
+
+  /** Pause and return to the first tick. Safe to call repeatedly. */
+  resetPlayhead(): void {
+    this.stopTransport();
+    this.setPlayheadTick(0);
+  }
+
+  /** Seek using the same musical/seconds Position as moveTo() and toTick(). */
+  seekPlayhead(position: Position): void {
+    this.seekPlayheadTick(this.toTick(position));
+  }
+
+  /**
+   * Seek to a raw finite tick in [0, lengthTicks], including fractional ticks.
+   * Seeking during playback restarts the clock anchor without changing BPM.
+   * Seeking to the end stops playback; later play() starts at zero.
+   */
+  seekPlayheadTick(tick: Tick): void {
+    this.assertPosition(tick);
+    if (this._isPlaying) {
+      this.transportAnchorTick = tick;
+      this.transportAnchorMs = performance.now();
+    }
+    this.setPlayheadTick(tick);
+    if (this._isPlaying && tick >= this.lengthTicks) {
+      this.stopTransport();
+    }
   }
 
   get ticksPerQuarter(): number {
@@ -302,6 +391,70 @@ export class Timeline {
     }
   }
 
+  /** Project elapsed wall-clock time at the current quarter-note BPM. */
+  private projectPlayhead(now: number): Tick {
+    if (!this._isPlaying) return this._playheadTick;
+
+    // Timers can be throttled or clocks can lose precision. Never move back.
+    const elapsedMs = Math.max(0, now - this.transportAnchorMs);
+    const advancedTicks =
+      (elapsedMs * this.bpm * this.ticksPerQuarter) / 60_000;
+    return Math.min(
+      this.lengthTicks,
+      Math.max(this._playheadTick, this.transportAnchorTick + advancedTicks),
+    );
+  }
+
+  private setPlayheadTick(tick: Tick): void {
+    const previousTick = this._playheadTick;
+    if (Object.is(previousTick, tick)) return;
+    this._playheadTick = tick;
+    this.transportChanges.emit({
+      type: "playhead-moved",
+      previousTick,
+      tick,
+    });
+  }
+
+  /** Materialize the current clock position and stop automatically at the end. */
+  private advanceTransport(now: number): void {
+    if (!this._isPlaying) return;
+    this.setPlayheadTick(this.projectPlayhead(now));
+    if (this._playheadTick >= this.lengthTicks) {
+      this.stopTransport();
+    }
+  }
+
+  private stopTransport(): void {
+    if (!this._isPlaying) return;
+    this._isPlaying = false;
+    if (this.transportTimer !== null) {
+      clearInterval(this.transportTimer);
+      this.transportTimer = null;
+    }
+    this.transportChanges.emit({ type: "playback-changed", isPlaying: false });
+  }
+
+  /**
+   * Coordinate document timing transitions with an independent live clock.
+   * Advance at OLD BPM first; then switch the anchor to the new BPM.
+   * Truncating the timeline clamps and stops playback without editing history.
+   */
+  private applyTimingState(next: TimelineState): void {
+    if (this._state === next) return;
+    const now = performance.now();
+    this.advanceTransport(now);
+    this._state = next;
+
+    if (this._playheadTick >= next.lengthTicks) {
+      this.setPlayheadTick(Math.min(this._playheadTick, next.lengthTicks));
+      this.stopTransport();
+    } else if (this._isPlaying) {
+      this.transportAnchorTick = this._playheadTick;
+      this.transportAnchorMs = now;
+    }
+  }
+
   private applyState(nextInput: TimelineState): void {
     const previous = this._state;
     this.validateBpm(nextInput.bpm);
@@ -373,7 +526,7 @@ export class Timeline {
         if (this._state !== (forward ? previous : next)) {
           throw new Error("Timeline was modified outside this mutation");
         }
-        this._state = forward ? next : previous;
+        this.applyTimingState(forward ? next : previous);
       },
       recover: (direction: "forward" | "backward") => {
         const expected = direction === "forward" ? previous : next;
@@ -381,7 +534,7 @@ export class Timeline {
         if (this._state !== expected && this._state !== destination) {
           throw new Error("Timeline recovery was incomplete");
         }
-        this._state = expected;
+        this.applyTimingState(expected);
       },
       publish: (direction: "forward" | "backward") => {
         changes(direction === "forward");

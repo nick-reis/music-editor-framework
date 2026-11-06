@@ -94,6 +94,17 @@ export type ToolChange = {
   readonly selectedTool: ToolId;
 };
 
+export type TimelineTransportChange =
+  | {
+      readonly type: "playhead-moved";
+      readonly previousTick: Tick;
+      readonly tick: Tick;
+    }
+  | {
+      readonly type: "playback-changed";
+      readonly isPlaying: boolean;
+    };
+
 export type TimelineChange =
   | {
       readonly type: "bpm";
