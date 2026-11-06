@@ -217,3 +217,73 @@ describe("Timeline change notifications", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 });
+
+
+describe("Timeline configurable resolution and workspace history", () => {
+  it("preserves legacy 480-tick resolution and accepts a custom resolution", () => {
+    const defaultTimeline = new Timeline(120);
+    const custom = new Timeline({ bpm: 120, ticksPerQuarter: 960 });
+
+    expect(defaultTimeline.ticksPerQuarter).toBe(480);
+    expect(custom.ticksPerQuarter).toBe(960);
+    expect(custom.secondsToTicks(2)).toBe(3840);
+    expect(custom.ticksToSeconds(3840)).toBe(2);
+    custom.setBpm(60);
+    expect(custom.ticksPerQuarter).toBe(960);
+    expect(custom.secondsToTicks(2)).toBe(1920);
+  });
+
+  it("prevents changing project tick resolution after construction", () => {
+    const timeline = new Timeline({ ticksPerQuarter: 960 });
+    expect(Reflect.set(timeline, "ticksPerQuarter", 480)).toBe(false);
+    expect(timeline.ticksPerQuarter).toBe(960);
+  });
+
+  it.each([0, -1, 0.1, Number.NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects invalid ticks-per-quarter resolution %s",
+    (ticksPerQuarter) => {
+      expect(() => new Timeline({ ticksPerQuarter }))
+        .toThrow(/Ticks per quarter must be a positive safe integer/);
+    },
+  );
+
+  it("rejects invalid conversion values and overflow", () => {
+    const timeline = new Timeline();
+
+    expect(() => timeline.secondsToTicks(Infinity))
+      .toThrow("Seconds must be finite");
+    expect(() => timeline.ticksToSeconds(Number.NaN))
+      .toThrow("Ticks must be finite");
+    expect(() => timeline.secondsToTicks(Number.MAX_VALUE))
+      .toThrow("Ticks conversion overflow");
+  });
+
+  it("supports negative time offsets and fractional ticks without rounding", () => {
+    const timeline = new Timeline(137);
+    const ticks = -123.456789;
+
+    expect(timeline.secondsToTicks(timeline.ticksToSeconds(ticks)))
+      .toBeCloseTo(ticks, 10);
+    expect(timeline.secondsToTicks(0)).toBe(0);
+  });
+
+  it("exposes a start-aware API for native audio durations", () => {
+    const timeline = new Timeline({ bpm: 120, ticksPerQuarter: 960 });
+
+    expect(timeline.durationSecondsToTicks(0, 2)).toBe(3840);
+    expect(timeline.durationSecondsToTicks(5000, 2)).toBe(3840);
+    expect(() => timeline.durationSecondsToTicks(Infinity, 2))
+      .toThrow("Ticks must be finite");
+    expect(() => timeline.durationSecondsToTicks(0, 0))
+      .toThrow("Audio duration must be positive");
+  });
+
+  it("does not notify on an unchanged tempo", () => {
+    const timeline = new Timeline();
+    const listener = vi.fn();
+    timeline.onChange(listener);
+
+    timeline.setBpm(120);
+    expect(listener).not.toHaveBeenCalled();
+  });
+});

@@ -6,6 +6,7 @@ import { MutationCapture } from "../mutations/MutationCapture";
 import { AudioClip } from "../elements/AudioClip";
 import { AudioGrid } from "../grids/AudioGrid";
 import { MidiGrid } from "../grids/MidiGrid";
+import { Timeline } from "../timeline/Timeline";
 
 describe("EditorWorkspace", () => {
   it("initializes with no containers and restores an explicit ID", () => {
@@ -1996,5 +1997,129 @@ describe("EditorWorkspace undoable container structure", () => {
     const workspace = new EditorWorkspace([a, b]);
     expect(workspace.history.canUndo).toBe(false);
     expect(workspace.getContainers()).toEqual([a, b]);
+  });
+});
+
+
+describe("EditorWorkspace timeline transaction integration", () => {
+  it("owns its timeline and preserves the constructor's original options", () => {
+    const timeline = new Timeline({ bpm: 90, ticksPerQuarter: 960 });
+    const workspace = new EditorWorkspace([], "custom-timeline", timeline);
+
+    expect(workspace.timeline).toBe(timeline);
+    expect(workspace.timeline.bpm).toBe(90);
+    expect(workspace.timeline.ticksPerQuarter).toBe(960);
+    expect(workspace.history.canUndo).toBe(false);
+  });
+
+  it("does not allow swapping a workspace's timeline reference", () => {
+    const workspace = new EditorWorkspace();
+    const original = workspace.timeline;
+
+    expect(Reflect.set(workspace, "timeline", new Timeline(30))).toBe(false);
+    expect(workspace.timeline).toBe(original);
+  });
+
+  it("rejects using one mutable Timeline instance in two workspaces", () => {
+    const timeline = new Timeline();
+    const first = new EditorWorkspace([], "first", timeline);
+    expect(() => new EditorWorkspace([], "second", timeline))
+      .toThrow("Timeline already belongs to a workspace");
+    expect(first.timeline).toBe(timeline);
+  });
+
+  it("makes BPM changes directly invalidating and recorded changes undoable", () => {
+    const workspace = new EditorWorkspace();
+    const listener = vi.fn();
+    workspace.onChange(listener);
+
+    workspace.history.execute("Tempo", () => {
+      workspace.timeline.setBpm(90);
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    expect(workspace.history.undoLabel).toBe("Tempo");
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
+      type: "timeline-changed",
+      change: { previousBpm: 120, bpm: 90 },
+    }]);
+
+    listener.mockClear();
+    expect(workspace.history.undo()).toBe(true);
+    expect(workspace.timeline.bpm).toBe(120);
+    expect(listener).toHaveBeenCalledExactlyOnceWith([{
+      type: "timeline-changed",
+      change: { previousBpm: 90, bpm: 120 },
+    }]);
+
+    expect(workspace.history.redo()).toBe(true);
+    expect(workspace.timeline.bpm).toBe(90);
+
+    workspace.timeline.setBpm(60);
+    expect(workspace.timeline.bpm).toBe(60);
+    expect(workspace.history.canUndo).toBe(false);
+    expect(workspace.history.canRedo).toBe(false);
+  });
+
+  it("drops tempo notifications and restores BPM after a failed transaction", () => {
+    const workspace = new EditorWorkspace();
+    const workspaceEvents = vi.fn();
+    const timelineEvents = vi.fn();
+    workspace.onChange(workspaceEvents);
+    workspace.timeline.onChange(timelineEvents);
+
+    expect(() => workspace.history.execute("Invalid", () => {
+      workspace.timeline.setBpm(80);
+      expect(workspace.timeline.bpm).toBe(80);
+      expect(workspaceEvents).not.toHaveBeenCalled();
+      expect(timelineEvents).not.toHaveBeenCalled();
+      throw new Error("Abort");
+    })).toThrow("Abort");
+
+    expect(workspace.timeline.bpm).toBe(120);
+    expect(workspaceEvents).not.toHaveBeenCalled();
+    expect(timelineEvents).not.toHaveBeenCalled();
+    expect(workspace.history.canUndo).toBe(false);
+  });
+
+  it("records note positioning and tempo as one atomic history entry", () => {
+    const grid = new MidiGrid([{ id: "c4", label: "C4", pitch: 60 }], "piano");
+    const note = new MidiNote(0, 0, 480, "note");
+    grid.addElement(note);
+    const workspace = new EditorWorkspace([new GridContainer([grid], "tracks")]);
+
+    workspace.history.execute("Move and retime", () => {
+      note.moveToTick(240);
+      workspace.timeline.setBpm(90);
+    });
+
+    expect(note.startTick).toBe(240);
+    expect(workspace.timeline.bpm).toBe(90);
+    expect(workspace.history.undo()).toBe(true);
+    expect(note.startTick).toBe(0);
+    expect(workspace.timeline.bpm).toBe(120);
+    expect(workspace.history.redo()).toBe(true);
+    expect(note.startTick).toBe(240);
+    expect(workspace.timeline.bpm).toBe(90);
+  });
+
+  it("allows an independent workspace to change tempo during another transaction", () => {
+    const first = new EditorWorkspace([], "first");
+    const second = new EditorWorkspace([], "second");
+    const firstListener = vi.fn();
+    const secondListener = vi.fn();
+    first.onChange(firstListener);
+    second.onChange(secondListener);
+
+    first.history.execute("First", () => {
+      first.timeline.setBpm(90);
+      second.history.execute("Second", () => second.timeline.setBpm(60));
+      expect(firstListener).not.toHaveBeenCalled();
+      expect(secondListener).toHaveBeenCalledTimes(1);
+    });
+
+    expect(firstListener).toHaveBeenCalledTimes(1);
+    expect(first.timeline.bpm).toBe(90);
+    expect(second.timeline.bpm).toBe(60);
   });
 });

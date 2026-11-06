@@ -14,6 +14,7 @@ export { EditorWorkspace } from "./workspace/EditorWorkspace";
 export { SelectionManager } from "./managers/SelectionManager";
 export { ToolManager } from "./managers/ToolManager";
 export { Timeline } from "./timeline/Timeline";
+export type { TimelineOptions } from "./timeline/Timeline";
 
 // Observation infrastructure
 export { ChangeEmitter } from "./events/ChangeEmitter";

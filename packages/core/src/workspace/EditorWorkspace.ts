@@ -5,6 +5,8 @@ import {
   attachContainerToWorkspace,
   detachContainerFromWorkspace,
   registerWorkspace,
+  attachTimelineToWorkspace,
+  getOwningWorkspace,
 } from "../internal/ModelOwnership";
 
 import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
@@ -16,6 +18,7 @@ import { GridContainer } from "../grids/GridContainer";
 import { SelectionManager } from "../managers/SelectionManager";
 import { EditorHistory } from "../history/EditorHistory";
 import { EditableElement } from "../elements/EditableElement";
+import { Timeline } from "../timeline/Timeline";
 
 type StructureState = Readonly<{
   containers: readonly GridContainer[];
@@ -24,6 +27,7 @@ type StructureState = Readonly<{
 export class EditorWorkspace {
   public readonly id: WorkspaceId;
   public readonly selection = new SelectionManager();
+  private readonly _timeline: Timeline;
 
   public readonly history = new EditorHistory(
     (target) => this.ownsTarget(target),
@@ -49,6 +53,7 @@ export class EditorWorkspace {
   constructor(
     containers: readonly GridContainer[] = [],
     id: WorkspaceId = crypto.randomUUID(),
+    timeline: Timeline = new Timeline(),
   ) {
     this.id = id;
 
@@ -77,11 +82,21 @@ export class EditorWorkspace {
       }
     }
 
+    attachTimelineToWorkspace(timeline, this);
+    this._timeline = timeline;
+    this.timeline.onInternalChange((change) => {
+      this.changes.emit({ type: "timeline-changed", change });
+    });
+
     registerWorkspace(this);
 
     for (const container of containers) {
       this.insertContainer(container, this.containerCount, false);
     }
+  }
+
+  get timeline(): Timeline {
+    return this._timeline;
   }
 
   onChange(listener: ChangeListener<readonly WorkspaceChange[]>): Unsubscribe {
@@ -385,7 +400,7 @@ export class EditorWorkspace {
   }
 
   private ownsTarget(target: object): boolean {
-    if (target === this) {
+    if (target === this || target === this.timeline) {
       return true;
     }
     if (target instanceof GridContainer) {
@@ -412,6 +427,10 @@ export class EditorWorkspace {
   private static ownerOf(target: object): EditorWorkspace | null {
     if (target instanceof EditorWorkspace) {
       return target;
+    }
+
+    if (target instanceof Timeline) {
+      return getOwningWorkspace(target);
     }
 
     if (target instanceof GridContainer) {

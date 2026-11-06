@@ -113,7 +113,7 @@ export abstract class EditableElement<
   }
 
   getEndTick(): Tick {
-    return this._state.startTick + this._state.durationTicks;
+    return this.startTick + this.durationTicks;
   }
 
   moveToTick(startTick: Tick): void {

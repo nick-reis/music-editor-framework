@@ -149,16 +149,16 @@ describe("EditableElement change notifications", () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
-  it("supports notifications inherited by AudioClip", () => {
+  it("supports ordinary movement notifications inherited by AudioClip", () => {
     const clip = new AudioClip(0, 0, 120, 1, "clip-1");
     const listener = vi.fn();
 
     clip.onChange(listener);
-    clip.syncToTempo(240);
+    clip.moveToTick(240);
 
     expect(listener).toHaveBeenCalledExactlyOnceWith({
       elementId: "clip-1",
-      properties: ["durationTicks"],
+      properties: ["startTick"],
     });
   });
 });
@@ -236,11 +236,11 @@ describe("EditableElement hard locking", () => {
     expect([note.startTick, note.durationTicks]).toEqual([10, 120]);
   });
 
-  it("currently blocks audio tick projection changes while locked", () => {
+  it("keeps locked audio immutable but allows derived tick duration changes", () => {
     const clip = new AudioClip(0, 0, 480, 2, "audio-clip");
     clip.setLocked(true);
 
-    expect(() => clip.syncToTempo(960)).toThrow(/locked/i);
+    expect(() => clip.moveToTick(960)).toThrow(/locked/i);
     expect(clip.durationSeconds).toBe(2);
     expect(clip.durationTicks).toBe(480);
   });

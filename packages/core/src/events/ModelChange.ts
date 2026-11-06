@@ -61,6 +61,10 @@ export type GridContainerChange =
 
 export type WorkspaceChange =
   | {
+      readonly type: "timeline-changed";
+      readonly change: TimelineChange;
+    }
+  | {
       readonly type: "container-added";
       readonly containerId: GridContainerId;
     }

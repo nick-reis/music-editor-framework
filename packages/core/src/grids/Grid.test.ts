@@ -308,12 +308,12 @@ describe("Grid change notifications", () => {
     const listener = vi.fn();
     grid.onChange(listener);
 
-    clip.syncToTempo(240);
+    clip.moveToTick(240);
 
     expect(listener).toHaveBeenCalledExactlyOnceWith([{
       type: "element-updated",
       elementId: "clip-1",
-      properties: ["durationTicks"],
+      properties: ["startTick"],
     }]);
   });
 
