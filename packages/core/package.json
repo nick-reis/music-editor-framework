@@ -15,7 +15,8 @@
     "test": "vitest run",
     "check": "tsc --noEmit -p tsconfig.json",
     "build": "tsdown",
-    "dev": "tsdown --watch"
+    "dev": "tsdown --watch",
+    "check:public-api": "npm run build && tsc --noEmit -p type-tests/tsconfig.json"
   },
   "devDependencies": {
     "tsdown": "^0.23.5",

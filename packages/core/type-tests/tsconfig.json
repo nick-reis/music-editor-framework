@@ -1,0 +1,10 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "skipLibCheck": false,
+    "noEmit": true
+  },
+  "include": [
+    "./public-api.ts"
+  ]
+}
