@@ -1,22 +1,20 @@
 import { ChangeBatchEmitter } from "../events/ChangeBatchEmitter";
-import { MutationCapture } from "../mutations/MutationCapture";
-import {
-  attachElementToGrid,
-  detachElementFromGrid,
-  getGridContainer,
-  getOwningWorkspace,
-} from "../internal/ModelOwnership";
+import { EditExecutor } from "../editing/EditExecutor";
+import { GridMembership } from "../editing/GridMembership";
+import { transferElement } from "../operations/ElementOperations";
+import { getGridContainer, getOwningWorkspace } from "../internal/ModelOwnership";
 
 import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
+import type { EditStep } from "../editing/EditPlan";
 import type { GridChange } from "../events/ModelChange";
 import type { GridId, ElementId } from "../types/ids";
 import type { ToolId } from "../tools/ToolId";
 import type { EditableElement } from "../elements/EditableElement";
+import type { Tick } from "../types/time";
+import type { RowIndex } from "../types/coordinates";
 import type { GridRow } from "./rows/GridRow";
 import type { GridContainer } from "./GridContainer";
 import type { Timeline } from "../timeline/Timeline";
-
-type MembershipState = Readonly<{ present: boolean }>;
 
 export abstract class Grid<
   TElement extends EditableElement = EditableElement,
@@ -25,13 +23,13 @@ export abstract class Grid<
   public readonly id: GridId;
   public readonly rows: readonly TRow[];
 
-  private readonly elements = new Map<ElementId, TElement>();
-
   private readonly changes = new ChangeBatchEmitter<GridChange>(
     () => getOwningWorkspace(this),
   );
-  private readonly elementSubscriptions = new Map<ElementId, Unsubscribe>();
-  private readonly membershipStates = new WeakMap<TElement, MembershipState>();
+  private readonly membership = new GridMembership<TElement>(
+    this,
+    (change) => this.changes.emit(change),
+  );
 
   protected constructor(
     rows: readonly TRow[],
@@ -92,142 +90,70 @@ export abstract class Grid<
   }
 
   addElement(element: TElement): void {
-    this.insertElement(element, this.elements.size);
+    if (element.grid !== null) {
+      throw new Error(`Element ${element.id} already belongs to a grid`);
+    }
+    if (element.row >= this.rowCount) {
+      throw new Error("Element row is outside grid bounds");
+    }
+    const index = this.membership.size;
+    EditExecutor.execute({
+      target: this,
+      steps: [this.membership.prepareInsert(element, index)],
+    });
   }
 
   removeElement(id: ElementId): boolean {
-    const element = this.elements.get(id);
+    const element = this.membership.get(id);
+    if (!element) return false;
 
-    if (!element) {
-      return false;
-    }
-
-    this.removeExactElement(element);
+    EditExecutor.execute({
+      target: this,
+      steps: [this.membership.prepareRemove(element)],
+    });
     return true;
   }
 
   getElement(id: ElementId): TElement | undefined {
-    return this.elements.get(id);
+    return this.membership.get(id);
   }
 
   getElements(): readonly TElement[] {
-    return [...this.elements.values()];
+    return this.membership.all();
   }
 
-  private insertElement(
-    element: TElement,
-    index: number,
-    expected?: MembershipState,
-    restored?: MembershipState,
-  ): void {
-    if (this.elements.has(element.id)) {
-      throw new Error(`Element ${element.id} already exists`);
-    }
-
-    if (!Number.isInteger(index) || index < 0 || index > this.elements.size) {
-      throw new RangeError("Invalid element insertion index");
-    }
-
-    const before =
-      this.membershipStates.get(element) ?? Object.freeze({ present: false });
-
-    if (expected && before !== expected) {
-      throw new Error(
-        `Element ${element.id} membership was modified outside this mutation`,
-      );
-    }
-
-    MutationCapture.assertTarget(this);
-
-    attachElementToGrid(element, this);
-
-    const ordered = [...this.elements.values()];
-    ordered.splice(index, 0, element);
-
-    this.elements.clear();
-
-    for (const item of ordered) {
-      this.elements.set(item.id, item);
-    }
-
-    const unsubscribe = element.onInternalChange((change) => {
-      this.changes.emit({
-        type: "element-updated",
-        elementId: change.elementId,
-        properties: change.properties,
-      });
-    });
-
-    this.elementSubscriptions.set(element.id, unsubscribe);
-
-    const after = restored ?? Object.freeze({ present: true });
-    this.membershipStates.set(element, after);
-
-    MutationCapture.record({
-      target: this,
-      before,
-      after,
-      undo: () => this.removeExactElement(element, after, before),
-      redo: () => this.insertElement(element, index, before, after),
-    });
-
-    this.changes.emit({
-      type: "element-added",
-      elementId: element.id,
-    });
+  /**
+   * Override to accept compatible incoming transfers. Unknown custom grid
+   * types reject them unless their implementation opts in explicitly.
+   */
+  protected acceptsTransferredElement(_element: EditableElement): boolean {
+    return false;
   }
 
-  private removeExactElement(
+  /** @internal Domain-level check for incoming transfers. */
+  canReceiveElement(element: EditableElement): boolean {
+    return this.acceptsTransferredElement(element);
+  }
+
+  /** @internal Reversible membership preparation for compound edit planners. */
+  prepareElementInsert(element: EditableElement, index: number): EditStep {
+    return this.membership.prepareInsert(element as TElement, index);
+  }
+
+  /** @internal Reversible membership preparation for compound edit planners. */
+  prepareElementRemove(element: EditableElement): EditStep {
+    return this.membership.prepareRemove(element as TElement);
+  }
+
+  transferElementTo(
     element: TElement,
-    expected?: MembershipState,
-    restored?: MembershipState,
+    target: Grid,
+    options: {
+      readonly row: RowIndex;
+      readonly startTick?: Tick;
+      readonly index?: number;
+    },
   ): void {
-    if (this.elements.get(element.id) !== element) {
-      throw new Error(
-        `Element ${element.id} is no longer the same grid member`,
-      );
-    }
-
-    if (element.locked) {
-      throw new Error(`Element ${element.id} is locked`);
-    }
-
-    const before = this.membershipStates.get(element);
-
-    if (!before || !before.present) {
-      throw new Error(`Invalid element ${element.id} membership state`);
-    }
-
-    if (expected && before !== expected) {
-      throw new Error(
-        `Element ${element.id} membership was modified outside this mutation`,
-      );
-    }
-
-    MutationCapture.assertTarget(this);
-
-    const index = [...this.elements.keys()].indexOf(element.id);
-
-    detachElementFromGrid(element, this);
-
-    this.elementSubscriptions.get(element.id)?.();
-    this.elementSubscriptions.delete(element.id);
-    this.elements.delete(element.id);
-
-    const after = restored ?? Object.freeze({ present: false });
-    this.membershipStates.set(element, after);
-
-    MutationCapture.record({
-      target: this,
-      before,
-      after,
-      undo: () => this.insertElement(element, index, after, before),
-      redo: () => this.removeExactElement(element, before, after),
-    });
-
-    this.changes.emit({
-      type: "element-removed",
-      elementId: element.id,
-    });
+    transferElement(this, element, target, options);
   }
 }

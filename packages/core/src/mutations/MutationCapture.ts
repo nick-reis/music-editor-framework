@@ -14,13 +14,8 @@ export interface MutationScope {
   readonly ownerOf: (target: object) => object | null;
 }
 
-type ReplayMarker = {
-  consumed: boolean;
-};
-
 export class MutationCapture {
   private static readonly stack: MutationCapture[] = [];
-  private static readonly replays: ReplayMarker[] = [];
 
   private readonly recorded: ReversibleMutation[] = [];
   private used = false;
@@ -42,21 +37,11 @@ export class MutationCapture {
     MutationCapture.resolve(target);
   }
 
+  /**
+   * The shared executor never re-records undo/redo. An independent edit inside
+   * a custom replay callback remains a direct edit and invalidates history.
+   */
   static record(mutation: ReversibleMutation): void {
-    const replay = MutationCapture.replays.at(-1);
-
-    // A history replay applies one model mutation before notifying
-    // observers. Consume this marker before observers can make
-    // their own direct edits.
-    // The first recorded mutation belongs to the replay operation itself.
-    // An inverse structural transfer may record against a different container
-    // than the original entry's target. All model operations record before
-    // emitting observer notifications, so subsequent edits remain direct.
-    if (replay && !replay.consumed) {
-      replay.consumed = true;
-      return;
-    }
-
     const capture = MutationCapture.resolve(mutation.target);
     capture?.recorded.push(mutation);
 
@@ -66,18 +51,6 @@ export class MutationCapture {
     const workspace = getOwningWorkspace(mutation.target);
     if (workspace && capture?.scope?.owner !== workspace) {
       workspace.history.invalidateOnDirectEdit();
-    }
-  }
-
-  static replayChange<R>(operation: () => R): R {
-    const marker: ReplayMarker = { consumed: false };
-
-    MutationCapture.replays.push(marker);
-
-    try {
-      return operation();
-    } finally {
-      MutationCapture.replays.pop();
     }
   }
 

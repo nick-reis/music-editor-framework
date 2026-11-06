@@ -6,7 +6,6 @@ import { Grid } from "./Grid";
 import type { GridRow } from "./rows/GridRow";
 import { AudioClip } from "../elements/AudioClip";
 import { AudioGrid } from "./AudioGrid";
-import { MoveElementsCommand } from "../commands/MoveElementsCommand";
 import { MidiGrid } from "./MidiGrid";
 import { EditorWorkspace } from "../workspace/EditorWorkspace";
 import { GridContainer } from "./GridContainer";
@@ -356,22 +355,20 @@ describe("Grid hard locking", () => {
     expect(grid.getElement(note.id)).toBeUndefined();
   });
 
-  it("rejects an entire legacy multi-note move when any member is locked", () => {
+  it("rejects an entire grouped move when any member is locked", () => {
     const grid = new MidiGrid(rows);
     const first = new MidiNote(0, 0, 120, "first");
     const second = new MidiNote(0, 120, 120, "second");
     grid.addElement(first);
     grid.addElement(second);
+    const workspace = new EditorWorkspace([new GridContainer([grid])]);
     second.setLocked(true);
     const changes = vi.fn();
     grid.onChange(changes);
 
-    const command = new MoveElementsCommand([
-      { grid, element: first, to: { tick: 480, row: 1 } },
-      { grid, element: second, to: { tick: 600, row: 1 } },
-    ]);
-
-    expect(() => command.execute()).toThrow(/locked/i);
+    expect(() => workspace.moveElements([first, second], {
+      by: { beats: 1 }, rows: 1,
+    })).toThrow(/locked/i);
     expect([first.startTick, first.row, second.startTick, second.row])
       .toEqual([0, 0, 120, 0]);
     expect(changes).not.toHaveBeenCalled();

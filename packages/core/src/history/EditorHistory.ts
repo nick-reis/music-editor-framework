@@ -161,13 +161,11 @@ export class EditorHistory {
           throw new Error("Mutation target is outside the history scope");
         }
 
-        MutationCapture.replayChange(() => {
-          if (direction === "undo") {
-            mutation.undo();
-          } else {
-            mutation.redo();
-          }
-        });
+        if (direction === "undo") {
+          mutation.undo();
+        } else {
+          mutation.redo();
+        }
 
         applied.push(mutation);
       }
@@ -176,13 +174,11 @@ export class EditorHistory {
 
       for (const mutation of applied.reverse()) {
         try {
-          MutationCapture.replayChange(() => {
-            if (direction === "undo") {
-              mutation.redo();
-            } else {
-              mutation.undo();
-            }
-          });
+          if (direction === "undo") {
+            mutation.redo();
+          } else {
+            mutation.undo();
+          }
         } catch (recoveryError) {
           recoveryErrors.push(recoveryError);
         }

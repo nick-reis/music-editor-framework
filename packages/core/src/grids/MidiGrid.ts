@@ -1,6 +1,7 @@
 import { Grid } from "./Grid";
 import { ToolId } from "../tools/ToolId";
 import type { GridId, ElementId } from "../types/ids";
+import type { EditableElement } from "../elements/EditableElement";
 import type { RowIndex } from "../types/coordinates";
 import type { Position, Duration } from "../types/time";
 import { MidiNote } from "../elements/MidiNote";
@@ -25,6 +26,10 @@ export class MidiGrid<TRow extends MidiRow = MidiRow> extends Grid<
   ]);
 
   readonly toolFallbacks: Readonly<Partial<Record<ToolId, ToolId>>> = {};
+
+  protected override acceptsTransferredElement(element: EditableElement): boolean {
+    return element instanceof MidiNote;
+  }
 
   constructor(rows: readonly TRow[], id?: GridId) {
     super(rows, id);

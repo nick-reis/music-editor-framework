@@ -1,5 +1,5 @@
 import { ChangeEmitter } from "../events/ChangeEmitter";
-import { MutationCapture } from "../mutations/MutationCapture";
+import { EditExecutor } from "../editing/EditExecutor";
 import { getOwningWorkspace } from "../internal/ModelOwnership";
 import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
 import type { TimelineChange } from "../events/ModelChange";
@@ -88,20 +88,20 @@ export class Timeline {
 
   setBpm(bpm: BPM): void {
     this.validateBpm(bpm);
-    this.applyState({ ...this._state, bpm }, true);
+    this.applyState({ ...this._state, bpm });
   }
 
   setTimeSignature(signature: TimeSignature): void {
     this.validateSignature(signature);
     const timeSignature = Object.freeze([...signature]) as unknown as TimeSignature;
-    this.applyState({ ...this._state, timeSignature }, true);
+    this.applyState({ ...this._state, timeSignature });
   }
 
   setLength(length: Duration): void {
     this.validateDuration(length);
     const lengthTicks = this.deltaToTicks(length, this.timeSignature, this.bpm);
     this.validateLength(lengthTicks);
-    this.applyState({ ...this._state, lengthTicks }, true);
+    this.applyState({ ...this._state, lengthTicks });
   }
 
   /** Convert a one-based musical location or an absolute time into ticks. */
@@ -302,7 +302,7 @@ export class Timeline {
     }
   }
 
-  private applyState(nextInput: TimelineState, capture: boolean): void {
+  private applyState(nextInput: TimelineState): void {
     const previous = this._state;
     this.validateBpm(nextInput.bpm);
     this.validateSignature(nextInput.timeSignature);
@@ -313,76 +313,84 @@ export class Timeline {
       previous.timeSignature[0] !== nextInput.timeSignature[0] ||
       previous.timeSignature[1] !== nextInput.timeSignature[1];
     const lengthChanged = !Object.is(previous.lengthTicks, nextInput.lengthTicks);
-
     if (!bpmChanged && !meterChanged && !lengthChanged) return;
 
-    // Replay must restore the SAME frozen snapshot object. Allocating a new
-    // equivalent object would break the identity checks in subsequent redo.
-    const next: TimelineState = Object.isFrozen(nextInput)
-      ? nextInput
-      : Object.freeze({
-          bpm: nextInput.bpm,
-          timeSignature: meterChanged
-            ? Object.freeze([...nextInput.timeSignature]) as unknown as TimeSignature
-            : previous.timeSignature,
-          lengthTicks: nextInput.lengthTicks,
-        });
+    const next: TimelineState = Object.freeze({
+      bpm: nextInput.bpm,
+      timeSignature: meterChanged
+        ? Object.freeze([...nextInput.timeSignature]) as unknown as TimeSignature
+        : previous.timeSignature,
+      lengthTicks: nextInput.lengthTicks,
+    });
 
-    // Preflight every existing element BEFORE any state or history changes.
     const workspace = getOwningWorkspace(this);
-    if (workspace) {
+    const assertProjection = (state: TimelineState): void => {
+      if (!workspace) return;
       for (const grid of workspace.getGrids()) {
         for (const element of grid.getElements()) {
           this.assertFitsElement(element, {
-            bpm: next.bpm,
-            lengthTicks: next.lengthTicks,
+            bpm: state.bpm,
+            lengthTicks: state.lengthTicks,
           });
         }
       }
-    }
+    };
 
-    if (capture) MutationCapture.assertTarget(this);
-    this._state = next;
+    const changes = (forward: boolean): void => {
+      const before = forward ? previous : next;
+      const after = forward ? next : previous;
+      if (bpmChanged) this.changes.emit({
+        type: "bpm",
+        previousBpm: before.bpm,
+        bpm: after.bpm,
+      });
+      if (meterChanged) this.changes.emit({
+        type: "time-signature",
+        previousTimeSignature: before.timeSignature,
+        timeSignature: after.timeSignature,
+      });
+      if (lengthChanged) this.changes.emit({
+        type: "length",
+        previousLengthTicks: before.lengthTicks,
+        lengthTicks: after.lengthTicks,
+      });
+    };
 
-    MutationCapture.record({
-      target: this,
+    const step = {
       before: previous,
       after: next,
-      undo: () => this.restoreState(next, previous),
-      redo: () => this.restoreState(previous, next),
+      targets: [this],
+      stateOwner: this,
+      validate: (direction: "forward" | "backward") => {
+        const forward = direction === "forward";
+        if (this._state !== (forward ? previous : next)) {
+          throw new Error("Timeline was modified outside this mutation");
+        }
+        assertProjection(forward ? next : previous);
+      },
+      apply: (direction: "forward" | "backward") => {
+        const forward = direction === "forward";
+        if (this._state !== (forward ? previous : next)) {
+          throw new Error("Timeline was modified outside this mutation");
+        }
+        this._state = forward ? next : previous;
+      },
+      recover: (direction: "forward" | "backward") => {
+        const expected = direction === "forward" ? previous : next;
+        const destination = direction === "forward" ? next : previous;
+        if (this._state !== expected && this._state !== destination) {
+          throw new Error("Timeline recovery was incomplete");
+        }
+        this._state = expected;
+      },
+      publish: (direction: "forward" | "backward") => {
+        changes(direction === "forward");
+      },
+    };
+    EditExecutor.execute({
+      target: this,
+      steps: [step],
     });
-
-    if (bpmChanged) {
-      this.changes.emit({
-        type: "bpm",
-        previousBpm: previous.bpm,
-        bpm: next.bpm,
-      });
-    }
-    if (meterChanged) {
-      this.changes.emit({
-        type: "time-signature",
-        previousTimeSignature: previous.timeSignature,
-        timeSignature: next.timeSignature,
-      });
-    }
-    if (lengthChanged) {
-      this.changes.emit({
-        type: "length",
-        previousLengthTicks: previous.lengthTicks,
-        lengthTicks: next.lengthTicks,
-      });
-    }
-  }
-
-  private restoreState(expected: TimelineState, next: TimelineState): void {
-    if (MutationCapture.isRecording(this)) {
-      throw new Error("Cannot replay during mutation capture");
-    }
-    if (this._state !== expected) {
-      throw new Error("Timeline was modified outside this mutation");
-    }
-    this.applyState(next, false);
   }
 
   private beatTicks(signature: TimeSignature): Tick {

@@ -97,24 +97,6 @@ export function detachGridFromContainer(
   containersByGrid.delete(grid);
 }
 
-export function reparentGridToContainer(
-  grid: Grid,
-  source: GridContainer,
-  target: GridContainer,
-): void {
-  if (getGridContainer(grid) !== source) {
-    throw new Error(`Grid ${grid.id} does not belong to the source`);
-  }
-
-  if (source.workspace !== target.workspace) {
-    throw new Error(
-      "Grid transfers require the same workspace or detached containers",
-    );
-  }
-
-  containersByGrid.set(grid, target);
-}
-
 export function getContainerWorkspace(
   container: GridContainer,
 ): EditorWorkspace | null {

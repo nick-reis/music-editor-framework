@@ -3,6 +3,8 @@ import { MidiNote } from "./MidiNote";
 import { AudioClip } from "./AudioClip";
 import { EditableElement } from "./EditableElement";
 import { MutationCapture } from "../mutations/MutationCapture";
+import { Grid } from "../grids/Grid";
+import { ToolId } from "../tools/ToolId";
 
 describe("EditableElement behavior through MidiNote", () => {
   it("initializes identifiers, row, start tick, and duration", () => {
@@ -265,11 +267,13 @@ describe("EditableElement custom state extension", () => {
     }
 
     set velocity(value: number) {
-      if (!Number.isInteger(value) || value < 0 || value > 127) {
+      this.updateState({ velocity: value });
+    }
+
+    protected override validateState({ velocity }: { velocity: number }): void {
+      if (!Number.isInteger(velocity) || velocity < 0 || velocity > 127) {
         throw new RangeError("Invalid velocity");
       }
-
-      this.updateState({ velocity: value });
     }
 
     retime(startTick: number, durationTicks: number): void {
@@ -284,6 +288,24 @@ describe("EditableElement custom state extension", () => {
     expect(note.startTick).toBe(0);
     expect(note.durationTicks).toBe(120);
     expect(note.locked).toBe(false);
+  });
+
+  it("validates initial custom state after subclass construction, before grid attachment", () => {
+    class VelocityGrid extends Grid<VelocityNote> {
+      readonly supportedTools: ReadonlySet<ToolId> = new Set([ToolId.Pointer]);
+      readonly toolFallbacks: Readonly<Partial<Record<ToolId, ToolId>>> = {};
+      constructor() {
+        super([{ id: "row", label: "Velocity" }]);
+      }
+    }
+    const grid = new VelocityGrid();
+    const invalid = new VelocityNote(200, "invalid");
+    expect(() => grid.addElement(invalid)).toThrow("Invalid velocity");
+    expect(invalid.grid).toBeNull();
+    expect(grid.getElements()).toEqual([]);
+    const valid = new VelocityNote(127, "valid");
+    grid.addElement(valid);
+    expect(valid.grid).toBe(grid);
   });
 
   it("updates custom properties through a normal setter", () => {

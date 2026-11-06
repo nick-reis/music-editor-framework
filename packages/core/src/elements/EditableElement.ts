@@ -1,5 +1,6 @@
 import { ChangeEmitter } from "../events/ChangeEmitter";
-import { MutationCapture } from "../mutations/MutationCapture";
+import { EditExecutor } from "../editing/EditExecutor";
+import type { EditStep } from "../editing/EditPlan";
 import { getElementGrid, getOwningWorkspace } from "../internal/ModelOwnership";
 
 import type { ChangeListener, Unsubscribe } from "../events/ChangeEmitter";
@@ -160,6 +161,129 @@ export abstract class EditableElement<
     return storedDurationTicks;
   }
 
+  /** @internal Validate custom state once the concrete subclass is initialized. */
+  assertValidState(): void {
+    this.validateSharedState(this._state);
+    this.validateState(this._state as Readonly<TExtra>);
+  }
+
+  /**
+   * @internal An inert state transition; suitable for one-element and compound
+   * operations. In particular, transfers validate the DESTINATION row count.
+   */
+  preparePosition(
+    row: RowIndex,
+    startTick: Tick,
+    targetRowCount: number,
+    timeline: Timeline,
+    originalRowCount: number = this.grid?.rowCount ?? targetRowCount,
+  ): EditStep {
+    return this.prepareStateUpdate({ row, startTick }, {
+      forwardRowCount: targetRowCount,
+      backwardRowCount: originalRowCount,
+      timeline,
+    });
+  }
+
+  /**
+   * @internal Consolidate all changes to one element in a single edit step.
+   * Prefer this over preparing several steps for the same element.
+   */
+  prepareStateUpdate(
+    patch: Partial<ElementState> | Partial<TExtra>,
+    options: {
+      forwardRowCount?: number | null;
+      backwardRowCount?: number | null;
+      timeline?: Timeline | null;
+    } = {},
+  ): EditStep {
+    for (const key of Object.keys(patch)) {
+      if (!Object.hasOwn(this._state, key)) {
+        throw new Error(`Unknown element state property: ${key}`);
+      }
+    }
+    const next = Object.freeze({
+      ...this._state,
+      ...patch,
+    }) as Readonly<FullState<TExtra>>;
+    return this.prepareTransition(next, options);
+  }
+
+  private prepareTransition(
+    next: Readonly<FullState<TExtra>>,
+    options: {
+      forwardRowCount?: number | null;
+      backwardRowCount?: number | null;
+      timeline?: Timeline | null;
+    } = {},
+  ): EditStep {
+    const before = this._state;
+    const properties = (
+      Object.keys(before) as Extract<keyof FullState<TExtra>, string>[]
+    ).filter((key) => !Object.is(before[key], next[key]));
+    const after = properties.length === 0 ? before : next;
+    const timeline = options.timeline
+      ?? this.grid?.container?.workspace?.timeline
+      ?? null;
+
+    const validateDestination = (
+      state: Readonly<FullState<TExtra>>,
+      rowCount: number | null | undefined,
+    ) => {
+      this.validateSharedState(state, rowCount);
+      this.validateState(state as Readonly<TExtra>);
+      timeline?.assertFitsElement(this, {
+        startTick: state.startTick,
+        durationTicks: state.durationTicks,
+      });
+    };
+    if (properties.length > 0) {
+      const changesLock = properties.includes("locked");
+      const changesOther = properties.some((key) => key !== "locked");
+      if (changesOther) this.assertEditable();
+      if (changesLock && changesOther) {
+        throw new Error("Lock status must be changed separately");
+      }
+    }
+    validateDestination(after, options.forwardRowCount);
+    return {
+      before,
+      after,
+      targets: [this],
+      stateOwner: this,
+      validate: (direction) => {
+        const forward = direction === "forward";
+        if (this._state !== (forward ? before : after)) {
+          throw new Error(`Element ${this.id} was modified outside this mutation`);
+        }
+        validateDestination(
+          forward ? after : before,
+          forward ? options.forwardRowCount : options.backwardRowCount,
+        );
+      },
+      apply: (direction) => {
+        const forward = direction === "forward";
+        const expected = forward ? before : after;
+        if (this._state !== expected) {
+          throw new Error(`Element ${this.id} was modified outside this mutation`);
+        }
+        this._state = forward ? after : before;
+      },
+      recover: (direction) => {
+        const forward = direction === "forward";
+        const expected = forward ? before : after;
+        const destination = forward ? after : before;
+        if (this._state !== expected && this._state !== destination) {
+          throw new Error(`Element ${this.id} could not recover its state`);
+        }
+        this._state = expected;
+      },
+      publish: () => {
+        if (properties.length > 0) this.notifyChange(properties);
+      },
+    };
+  }
+
   private resolveTimeline(explicit?: Timeline): Timeline {
     const attached = this.grid?.container?.workspace?.timeline;
     if (attached) {
@@ -191,91 +315,29 @@ export abstract class EditableElement<
   }
 
   protected updateState(patch: Partial<ElementState> | Partial<TExtra>): void {
-    for (const key of Object.keys(patch)) {
-      if (!Object.hasOwn(this._state, key)) {
-        throw new Error(`Unknown element state property: ${key}`);
-      }
-    }
-
-    const next = Object.freeze({
-      ...this._state,
-      ...patch,
-    }) as Readonly<FullState<TExtra>>;
-
-    this.applyState(next, true);
-  }
-
-  protected validateState(_next: Readonly<FullState<TExtra>>): void {}
-
-  private applyState(
-    next: Readonly<FullState<TExtra>>,
-    capture: boolean,
-  ): void {
-    const before = this._state;
-
-    const properties = (
-      Object.keys(before) as Extract<keyof FullState<TExtra>, string>[]
-    ).filter((key) => !Object.is(before[key], next[key]));
-
-    if (properties.length === 0) return;
-
-    this.validateSharedState(next);
-    this.validateState(next);
-
-    this.grid?.container?.workspace?.timeline.assertFitsElement(this, {
-      startTick: next.startTick,
-      durationTicks: next.durationTicks,
-    });
-
-    const changesLock = properties.includes("locked");
-    const changesOther = properties.some((property) => property !== "locked");
-
-    if (changesOther) {
-      this.assertEditable();
-    }
-
-    if (changesLock && changesOther) {
-      throw new Error("Lock status must be changed separately");
-    }
-
-    if (capture) {
-      MutationCapture.assertTarget(this);
-    }
-
-    this._state = next;
-
-    MutationCapture.record({
+    const step = this.prepareStateUpdate(patch);
+    if (step.before === step.after) return;
+    EditExecutor.execute({
       target: this,
-      before,
-      after: next,
-      undo: () => this.restoreState(next, before),
-      redo: () => this.restoreState(before, next),
+      steps: [step],
     });
-
-    this.notifyChange(properties);
   }
 
-  private restoreState(
-    expected: Readonly<FullState<TExtra>>,
-    target: Readonly<FullState<TExtra>>,
+  /**
+   * Validate only custom fields. Built-in row, timing and locking invariants
+   * are enforced by the framework. This hook is optional.
+   */
+  protected validateState(_next: Readonly<TExtra>): void {}
+
+  private validateSharedState(
+    state: Readonly<ElementState>,
+    rowCount: number | null = this.grid?.rowCount ?? null,
   ): void {
-    if (MutationCapture.isRecording(this)) {
-      throw new Error("Cannot replay during mutation capture");
-    }
-
-    if (this._state !== expected) {
-      throw new Error(`Element ${this.id} was modified outside this mutation`);
-    }
-
-    this.applyState(target, false);
-  }
-
-  private validateSharedState(state: Readonly<ElementState>): void {
     if (!Number.isInteger(state.row) || state.row < 0) {
       throw new Error("Element row must be a non-negative integer");
     }
 
-    if (this.grid !== null && state.row >= this.grid.rowCount) {
+    if (rowCount !== null && state.row >= rowCount) {
       throw new Error("Element row is outside grid bounds");
     }
 
