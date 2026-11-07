@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/rolldown/tsdown/main/schema.json",
+  "entry": "src/index.ts",
+  "format": "esm",
+  "platform": "neutral",
+  "fixedExtension": false,
+  "outDir": "dist",
+  "dts": true,
+  "sourcemap": true,
+  "clean": true,
+  "external": ["@music-editor/core"]
+}
