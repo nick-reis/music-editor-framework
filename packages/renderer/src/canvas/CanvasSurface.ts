@@ -45,6 +45,11 @@ export class CanvasSurface {
     this.syncSize();
   }
 
+  /** Cached CSS-pixel viewport; read without a layout measurement. */
+  get size(): CanvasViewport {
+    return { ...this.viewport };
+  }
+
   /** Sync the backing bitmap with the host's CSS box and display DPR. */
   syncSize(): boolean {
     if (this.disposed) return false;

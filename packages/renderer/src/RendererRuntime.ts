@@ -3,21 +3,27 @@ import type {
   ToolManager,
 } from "@music-editor/core";
 
+import { RenderScheduler } from "./scheduling/RenderScheduler";
+import {
+  GridContainerView,
+  type MountGridContainerOptions,
+} from "./views/GridContainerView";
+
 export interface RendererRuntimeOptions {
   readonly workspace: EditorWorkspace;
   readonly tools: ToolManager;
 }
 
 /**
- * Coordinates rendering for one editor instance.
- *
- * Owns renderer resources, not document state.
- * No DOM access is performed during construction.
+ * Renderer-owned lifecycle for one editor instance.
+ * Core workspace and tools always remain owned by the caller.
  */
 export class RendererRuntime {
   readonly workspace: EditorWorkspace;
   readonly tools: ToolManager;
 
+  private readonly scheduler = new RenderScheduler();
+  private readonly views = new Set<GridContainerView>();
   private disposed = false;
 
   constructor(options: RendererRuntimeOptions) {
@@ -29,13 +35,33 @@ export class RendererRuntime {
     return this.disposed;
   }
 
-  /**
-   * Releases renderer-owned resources without disposing core objects.
-   */
+  mountContainer(
+    options: MountGridContainerOptions,
+  ): GridContainerView {
+    if (this.disposed) {
+      throw new Error("RendererRuntime is disposed");
+    }
+
+    const view = new GridContainerView(
+      this.workspace,
+      this.scheduler,
+      options,
+      () => { this.views.delete(view); },
+    );
+
+    this.views.add(view);
+    return view;
+  }
+
+  /** Release mounted resources without modifying the core workspace. */
   dispose(): void {
     if (this.disposed) return;
-
     this.disposed = true;
+
+    for (const view of [...this.views]) {
+      view.dispose();
+    }
+    this.scheduler.dispose();
   }
 }
 

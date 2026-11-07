@@ -67,6 +67,22 @@ describe("CanvasSurface", () => {
     surface.dispose();
   });
 
+  it("exposes its cached CSS viewport without measuring again", () => {
+    const { canvas } = makeCanvas();
+    const surface = new CanvasSurface(canvas, vi.fn());
+    const measure = vi.mocked(canvas.getBoundingClientRect);
+    measure.mockClear();
+
+    expect(surface.size).toEqual({
+      width: 800,
+      height: 400,
+      pixelRatio: 1,
+    });
+    expect(measure).not.toHaveBeenCalled();
+
+    surface.dispose();
+  });
+
   it("does not invalidate when dimensions are unchanged", () => {
     const { canvas } = makeCanvas();
     const invalidate = vi.fn();

@@ -21,6 +21,11 @@ interface ZoomAnchor {
   readonly screenX: number;
 }
 
+interface CameraBounds {
+  readonly lengthTicks: Tick;
+  readonly viewportWidth: number;
+}
+
 // Defaults preserve the old piano-roll prototype's horizontal camera feel.
 const DEFAULT_SCALE = 24 / TICKS_PER_QUARTER_NOTE;
 const DEFAULT_MAX_SCALE = 320 / TICKS_PER_QUARTER_NOTE;
@@ -61,6 +66,7 @@ export class HorizontalCamera {
   private current: HorizontalCameraState;
   private target: HorizontalCameraState;
   private anchor: ZoomAnchor | null = null;
+  private bounds: CameraBounds | null = null;
 
   readonly minPixelsPerTick: number;
   readonly maxPixelsPerTick: number;
@@ -120,6 +126,47 @@ export class HorizontalCamera {
     );
   }
 
+  /**
+   * Apply finite timeline bounds supplied by the owning container viewport.
+   * Without bounds the camera remains useful for standalone coordinate math.
+   */
+  setBounds(lengthTicks: Tick, viewportWidth: number): void {
+    finite(lengthTicks, "lengthTicks");
+    finite(viewportWidth, "viewportWidth");
+    if (lengthTicks < 0 || viewportWidth < 0) {
+      throw new RangeError("Camera bounds must be nonnegative");
+    }
+
+    this.bounds = { lengthTicks, viewportWidth };
+    this.current = {
+      ...this.current,
+      scrollLeft: this.clampScrollLeft(
+        this.current.scrollLeft,
+        this.current.pixelsPerTick,
+      ),
+    };
+    this.target = {
+      ...this.target,
+      scrollLeft: this.clampScrollLeft(
+        this.target.scrollLeft,
+        this.target.pixelsPerTick,
+      ),
+    };
+  }
+
+  private clampScrollLeft(scrollLeft: number, pixelsPerTick: number): number {
+    const requested = finite(scrollLeft, "scrollLeft");
+    if (!this.bounds) return requested;
+
+    const contentWidth = this.bounds.lengthTicks * pixelsPerTick;
+    const maxScrollLeft = Math.max(
+      0,
+      finite(contentWidth, "contentWidth") - this.bounds.viewportWidth,
+    );
+
+    return Math.min(maxScrollLeft, Math.max(0, requested));
+  }
+
   tickToX(tick: Tick): number {
     return finite(
       finite(tick, "tick") * this.current.pixelsPerTick -
@@ -145,7 +192,10 @@ export class HorizontalCamera {
 
     this.target = {
       ...this.target,
-      scrollLeft: nextScrollLeft,
+      scrollLeft: this.clampScrollLeft(
+        nextScrollLeft,
+        this.target.pixelsPerTick,
+      ),
     };
     this.anchor = null;
   }
@@ -156,7 +206,10 @@ export class HorizontalCamera {
 
     this.current = {
       ...this.current,
-      scrollLeft: nextScrollLeft,
+      scrollLeft: this.clampScrollLeft(
+        nextScrollLeft,
+        this.current.pixelsPerTick,
+      ),
     };
     this.target = { ...this.current };
     this.anchor = null;
@@ -188,7 +241,7 @@ export class HorizontalCamera {
     this.anchor = { tick, screenX };
     this.target = {
       pixelsPerTick: nextScale,
-      scrollLeft: nextScrollLeft,
+      scrollLeft: this.clampScrollLeft(nextScrollLeft, nextScale),
     };
   }
 
@@ -224,12 +277,12 @@ export class HorizontalCamera {
 
     const next: HorizontalCameraState = {
       pixelsPerTick: finite(scale, "pixelsPerTick"),
-      scrollLeft: finite(scrollLeft, "scrollLeft"),
+      scrollLeft: this.clampScrollLeft(scrollLeft, scale),
     };
 
     const settled =
       Math.abs(scale - this.target.pixelsPerTick) <= SCALE_TOLERANCE &&
-      Math.abs(scrollLeft - this.target.scrollLeft) <= SCROLL_TOLERANCE;
+      Math.abs(next.scrollLeft - this.target.scrollLeft) <= SCROLL_TOLERANCE;
 
     this.current = settled
       ? { ...this.target }

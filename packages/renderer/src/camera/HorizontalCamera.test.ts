@@ -129,6 +129,97 @@ describe("HorizontalCamera", () => {
     expect(() => camera.advance(NaN)).toThrow();
   });
 
+  it("clamps pan targets to both timeline boundaries", () => {
+    const camera = new HorizontalCamera();
+    // 16 quarter notes of content at 24 px per quarter = 384 CSS px.
+    camera.setBounds(480 * 16, 300);
+
+    camera.panBy(100_000);
+    expect(camera.targetState.scrollLeft).toBe(84);
+
+    for (let i = 0; i < 120; i++) {
+      camera.advance(1 / 60);
+      expect(camera.state.scrollLeft).toBeGreaterThanOrEqual(0);
+      expect(camera.state.scrollLeft).toBeLessThanOrEqual(84);
+    }
+    expect(camera.state.scrollLeft).toBe(84);
+
+    camera.panBy(-100_000);
+    expect(camera.targetState.scrollLeft).toBe(0);
+    for (let i = 0; i < 120; i++) {
+      camera.advance(1 / 60);
+      expect(camera.state.scrollLeft).toBeGreaterThanOrEqual(0);
+    }
+    expect(camera.state.scrollLeft).toBe(0);
+  });
+
+  it("clamps native scrolling immediately when bounds are set", () => {
+    const camera = new HorizontalCamera();
+    camera.setBounds(480 * 16, 300);
+
+    camera.setScrollLeftImmediate(100_000);
+    expect(camera.state.scrollLeft).toBe(84);
+
+    camera.setScrollLeftImmediate(-100);
+    expect(camera.state.scrollLeft).toBe(0);
+  });
+
+  it("stays within bounds throughout cursor-anchored zoom", () => {
+    const camera = new HorizontalCamera();
+    const lengthTicks = 480 * 16;
+    const viewportWidth = 300;
+    camera.setBounds(lengthTicks, viewportWidth);
+    camera.setScrollLeftImmediate(84);
+
+    camera.zoomAt(250, 2);
+    for (let i = 0; i < 120; i++) {
+      camera.advance(1 / 60);
+      const { scrollLeft, pixelsPerTick } = camera.state;
+      const max = Math.max(
+        0,
+        lengthTicks * pixelsPerTick - viewportWidth,
+      );
+      expect(scrollLeft).toBeGreaterThanOrEqual(0);
+      expect(scrollLeft).toBeLessThanOrEqual(max + 1e-8);
+    }
+
+    camera.zoomAt(250, 0.5);
+    for (let i = 0; i < 120; i++) {
+      camera.advance(1 / 60);
+      const { scrollLeft, pixelsPerTick } = camera.state;
+      expect(scrollLeft).toBeGreaterThanOrEqual(0);
+      expect(scrollLeft).toBeLessThanOrEqual(
+        Math.max(0, lengthTicks * pixelsPerTick - viewportWidth) + 1e-8,
+      );
+    }
+  });
+
+  it("reclamps current and target on viewport resizing or timeline shortening", () => {
+    const camera = new HorizontalCamera();
+    camera.setBounds(480 * 16, 300);
+    camera.setScrollLeftImmediate(84);
+    camera.panBy(-20);
+
+    camera.setBounds(480 * 16, 500);
+    expect(camera.state.scrollLeft).toBe(0);
+    expect(camera.targetState.scrollLeft).toBe(0);
+
+    camera.setBounds(480 * 16, 300);
+    camera.setScrollLeftImmediate(84);
+    camera.setBounds(480 * 8, 300);
+    expect(camera.state.scrollLeft).toBe(0);
+    expect(camera.targetState.scrollLeft).toBe(0);
+  });
+
+  it("rejects invalid viewport bounds", () => {
+    const camera = new HorizontalCamera();
+
+    expect(() => camera.setBounds(-1, 400)).toThrow();
+    expect(() => camera.setBounds(480, -1)).toThrow();
+    expect(() => camera.setBounds(Infinity, 400)).toThrow();
+    expect(() => camera.setBounds(480, NaN)).toThrow();
+  });
+
   it("does not access a DOM or start its own animation", () => {
     const camera = new HorizontalCamera();
     expect(camera.advance(1 / 60)).toBe(false);
